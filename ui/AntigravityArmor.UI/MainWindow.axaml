@@ -1,0 +1,327 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:AntigravityArmor.UI.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="750"
+        x:Class="AntigravityArmor.UI.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="Antigravity Armor // 破甲工程控制中枢 (AGY CLI Edition)"
+        Icon="/Assets/app-icon.ico"
+        Width="1120" Height="780"
+        MinWidth="900" MinHeight="600"
+        WindowStartupLocation="CenterScreen"
+        Background="#FAF9F5"
+        Foreground="#1F1E1D">
+
+    <Design.DataContext>
+        <vm:MainWindowViewModel/>
+    </Design.DataContext>
+
+    <Grid RowDefinitions="Auto, *">
+        <!-- 顶部 Header 状态栏 (Claude Warm White 风格) -->
+        <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="0,0,0,1" Padding="20,14">
+            <Grid ColumnDefinitions="Auto, *, Auto">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                    <!-- Claude 标志性陶土红指示条 -->
+                    <Border Background="#CC785C" CornerRadius="3" Width="6" Height="28"/>
+                    <StackPanel>
+                        <TextBlock Text="ANTIGRAVITY ARMOR" FontSize="18" FontWeight="Bold" Foreground="#1F1E1D" LetterSpacing="0.8"/>
+                        <TextBlock Text="Direct AGY CLI Integration &amp; Multi-Layer Anti-Refusal System" FontSize="11" Foreground="#797670"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- 快捷全局状态指示 -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+                    <Border Background="#F5F3ED" CornerRadius="6" Padding="12,6" BorderBrush="#E5E3DC" BorderThickness="1">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Ellipse Width="8" Height="8" Fill="{Binding IsDivertRunning, Converter={x:Null}, FallbackValue='#2E7D32'}"/>
+                            <TextBlock Text="Divert: 50100" FontSize="12" FontWeight="Medium" Foreground="#2D2B28"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Background="#F5F3ED" CornerRadius="6" Padding="12,6" BorderBrush="#E5E3DC" BorderThickness="1">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Ellipse Width="8" Height="8" Fill="#CC785C"/>
+                            <TextBlock Text="CLI: AGY.exe" FontSize="12" FontWeight="Medium" Foreground="#2D2B28"/>
+                        </StackPanel>
+                    </Border>
+                    <Button Content="刷新态势" Command="{Binding RefreshStatusCommand}" Background="#ECEAE4" Foreground="#2D2B28" BorderBrush="#D8D5CD" CornerRadius="6" Padding="14,6"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- 主内容选项卡 -->
+        <TabControl Grid.Row="1" Margin="16,12,16,16">
+            <!-- Tab 1: 态势大盘 (Dashboard) -->
+            <TabItem Header="🛡️ 态势大盘 (Dashboard)">
+                <Grid RowDefinitions="Auto, *, Auto" Margin="8">
+                    <!-- 五层装甲矩阵卡片 -->
+                    <Grid Grid.Row="0" ColumnDefinitions="*, *, *, *, *" Margin="0,0,0,16">
+                        <!-- L1 二进制 -->
+                        <Border Grid.Column="0" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,8,0">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="L1 二进制补丁" FontSize="11" Foreground="#797670" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding L1BinaryStatus}" FontSize="13" Foreground="#1F1E1D" FontWeight="Bold" TextWrapping="Wrap"/>
+                                <TextBlock Text="41个提示词注入点防护" FontSize="10" Foreground="#949088"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- L2 规则/技能 -->
+                        <Border Grid.Column="1" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,8,0">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="L2 规则 / 技能" FontSize="11" Foreground="#797670" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding L2RulesStatus}" FontSize="13" Foreground="#2E7D32" FontWeight="Bold" TextWrapping="Wrap"/>
+                                <TextBlock Text="AGENTS.md &amp; Armor 技能" FontSize="10" Foreground="#949088"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- L3 钩子守卫 -->
+                        <Border Grid.Column="2" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,8,0">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="L3 生命周期钩子" FontSize="11" Foreground="#797670" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding L3HooksStatus}" FontSize="13" Foreground="#0284C7" FontWeight="Bold" TextWrapping="Wrap"/>
+                                <TextBlock Text="PreToolUse 放行 &amp; 恢复" FontSize="10" Foreground="#949088"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- L4 AGY CLI -->
+                        <Border Grid.Column="3" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,8,0">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="L4 AGY 原生驱动" FontSize="11" Foreground="#797670" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding L4AgyStatus}" FontSize="13" Foreground="#7C3AED" FontWeight="Bold" TextWrapping="Wrap"/>
+                                <TextBlock Text="直接对接 CLI 架构" FontSize="10" Foreground="#949088"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- L5 改道代理 -->
+                        <Border Grid.Column="4" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14">
+                            <StackPanel Spacing="6">
+                                <TextBlock Text="L5 模型后端改道" FontSize="11" Foreground="#797670" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding L5DivertStatus}" FontSize="13" Foreground="#CC785C" FontWeight="Bold" TextWrapping="Wrap"/>
+                                <TextBlock Text="端口 50100 &amp; 拒绝重试" FontSize="10" Foreground="#949088"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <!-- 系统运行流水日志 -->
+                    <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14">
+                        <Grid RowDefinitions="Auto, *">
+                            <TextBlock Grid.Row="0" Text="系统内核与装甲诊断日志" FontSize="12" FontWeight="SemiBold" Foreground="#797670" Margin="0,0,0,8"/>
+                            <Border Grid.Row="1" Background="#F7F5EE" BorderBrush="#E2DDD5" BorderThickness="1" CornerRadius="6" Padding="10">
+                                <TextBox Text="{Binding SystemLog}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                                         FontFamily="Consolas, Cascadia Code, monospace" FontSize="12" Background="Transparent" BorderThickness="0" Foreground="#2B2927"/>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <!-- 底部快捷控制条 -->
+                    <Border Grid.Row="2" Margin="0,12,0,0" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Button Content="🚀 启动改道代理 (50100)" Command="{Binding StartDivertCommand}" Background="#CC785C" Foreground="#FFFFFF" BorderBrush="#B86347" CornerRadius="6" FontWeight="SemiBold" Padding="16,8"/>
+                            <Button Content="⏹ 停止代理" Command="{Binding StopDivertCommand}" Background="#C94A4A" Foreground="#FFFFFF" BorderBrush="#B03D3D" CornerRadius="6" FontWeight="SemiBold" Padding="16,8"/>
+                            <Button Content="⚙️ 一键应用装甲 (Install --apply)" Command="{Binding InstallArmorCommand}" Background="#3D3A36" Foreground="#FFFFFF" BorderBrush="#2B2927" CornerRadius="6" FontWeight="SemiBold" Padding="16,8"/>
+                            <Button Content="🔍 重新核验 (Verify)" Command="{Binding RefreshStatusCommand}" Background="#ECEAE4" Foreground="#2D2B28" BorderBrush="#D8D5CD" CornerRadius="6" Padding="16,8"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <!-- Tab 2: AGY CLI 控制台 (AGY Studio) -->
+            <TabItem Header="⚡ AGY CLI 工作台 (Studio)">
+                <Grid RowDefinitions="Auto, Auto, *" Margin="8">
+                    <!-- 控制台配置头 -->
+                    <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,12">
+                        <Grid ColumnDefinitions="Auto, *, Auto, Auto, Auto, Auto" RowDefinitions="Auto" VerticalAlignment="Center">
+                            <TextBlock Grid.Column="0" Text="模型:" VerticalAlignment="Center" Foreground="#5C5852" FontWeight="Medium" Margin="0,0,8,0"/>
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding AvailableModels}" SelectedItem="{Binding SelectedModel}" Margin="0,0,12,0" HorizontalAlignment="Stretch"/>
+
+                            <TextBlock Grid.Column="2" Text="模式:" VerticalAlignment="Center" Foreground="#5C5852" FontWeight="Medium" Margin="0,0,8,0"/>
+                            <ComboBox Grid.Column="3" ItemsSource="{Binding AvailableModes}" SelectedItem="{Binding SelectedMode}" Margin="0,0,12,0" Width="120"/>
+
+                            <TextBlock Grid.Column="4" Text="推理 Effort:" VerticalAlignment="Center" Foreground="#5C5852" FontWeight="Medium" Margin="0,0,8,0"/>
+                            <ComboBox Grid.Column="5" ItemsSource="{Binding AvailableEfforts}" SelectedItem="{Binding SelectedEffort}" Width="100"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- Prompt 输入区域 -->
+                    <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,12">
+                        <Grid RowDefinitions="*, Auto">
+                            <TextBox Grid.Row="0" Text="{Binding PromptInput}" Height="75" AcceptsReturn="True" TextWrapping="Wrap"
+                                     PlaceholderText="输入需要由 AGY 执行的 Prompt 或任务要求..." Background="#F7F5EE" BorderBrush="#E2DDD5" Foreground="#1F1E1D" CornerRadius="6" Padding="10"/>
+                            <Grid Grid.Row="1" ColumnDefinitions="Auto, Auto, *, Auto, Auto" Margin="0,12,0,0">
+                                <CheckBox Grid.Column="0" Content="自动跳过权限提示 (--dangerously-skip-permissions)" IsChecked="{Binding SkipPermissions}" Foreground="#2B2927" Margin="0,0,16,0"/>
+                                <CheckBox Grid.Column="1" Content="流量注入 50100 改道装甲代理" IsChecked="{Binding InjectDivert}" Foreground="#CC785C"/>
+                                <Button Grid.Column="3" Content="清空终端" Command="{Binding ClearAgyOutputCommand}" Background="#ECEAE4" Foreground="#5C5852" BorderBrush="#D8D5CD" CornerRadius="6" Margin="0,0,10,0" Padding="14,6"/>
+                                <Button Grid.Column="4" Content="执行 Prompt (Run AGY)" Command="{Binding RunAgyPromptCommand}" Background="#CC785C" Foreground="#FFFFFF" BorderBrush="#B86347" CornerRadius="6" FontWeight="Bold" Padding="18,6"/>
+                            </Grid>
+                        </Grid>
+                    </Border>
+
+                    <!-- AGY CLI 实时终端输出 -->
+                    <Border Grid.Row="2" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14">
+                        <Grid RowDefinitions="Auto, *">
+                            <Grid Grid.Row="0" ColumnDefinitions="*, Auto" Margin="0,0,0,8">
+                                <TextBlock Grid.Column="0" Text="AGY CLI 原生流式输出通道" FontSize="12" FontWeight="SemiBold" Foreground="#797670"/>
+                                <Button Grid.Column="1" Content="终止当前任务" Command="{Binding CancelAgyPromptCommand}" Background="#C94A4A" Foreground="#FFFFFF" BorderBrush="#B03D3D" CornerRadius="4" Padding="12,4" FontSize="11"/>
+                            </Grid>
+                            <Border Grid.Row="1" Background="#F7F5EE" BorderBrush="#E2DDD5" BorderThickness="1" CornerRadius="6" Padding="10">
+                                <TextBox Text="{Binding AgyOutput}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                                         FontFamily="Consolas, Cascadia Code, monospace" FontSize="12" Background="Transparent" BorderThickness="0" Foreground="#1F1E1D"/>
+                            </Border>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <!-- Tab 3: 破甲跑分台 (Armor Probe Bench) -->
+            <TabItem Header="📊 破甲跑分 (Probe Bench)">
+                <Grid RowDefinitions="Auto, *" Margin="8">
+                    <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,12">
+                        <Grid ColumnDefinitions="*, Auto">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="34 条核心安全探针全自动破甲基准评测" FontSize="14" FontWeight="Bold" Foreground="#1F1E1D"/>
+                                <TextBlock Text="真实直连 50100 Claude API：统计 HTTP 状态、首字节延迟、交付字符与最终拒答分类；离线 mock 仅用于机器逻辑测试" FontSize="11" Foreground="#797670" Margin="0,4,0,0"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="🚀 开始跑分测试" Command="{Binding RunProbeCommand}" Background="#CC785C" Foreground="#FFFFFF" BorderBrush="#B86347" CornerRadius="6" Padding="18,8" FontWeight="Bold"/>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14">
+                        <Border Background="#F7F5EE" BorderBrush="#E2DDD5" BorderThickness="1" CornerRadius="6" Padding="10">
+                            <TextBox Text="{Binding ProbeOutput}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                                     FontFamily="Consolas, Cascadia Code, monospace" FontSize="12" Background="Transparent" BorderThickness="0" Foreground="#1F1E1D"/>
+                        </Border>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <!-- Tab 4: 证据隐匿评测 (Evasion Eval) -->
+            <TabItem Header="🕵️ 证据隐匿评测 (Evasion Eval)">
+                <Grid RowDefinitions="Auto, *" Margin="8">
+                    <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,12">
+                        <Grid ColumnDefinitions="*, Auto, Auto">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="6 类证据隐匿手法对抗评测夹具" FontSize="14" FontWeight="Bold" Foreground="#1F1E1D"/>
+                                <TextBlock Text="验证零宽字符、RLO 覆盖、同形字、NTFS ADS 数据流、timestomp 与诱饵对代理的可见性" FontSize="11" Foreground="#797670" Margin="0,4,0,0"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="物化夹具 (Build)" Command="{Binding BuildEvalFixtureCommand}" Background="#ECEAE4" Foreground="#2D2B28" BorderBrush="#D8D5CD" CornerRadius="6" Padding="14,8" Margin="0,0,10,0"/>
+                            <Button Grid.Column="2" Content="📈 生成评测报告" Command="{Binding RunEvalReportCommand}" Background="#CC785C" Foreground="#FFFFFF" BorderBrush="#B86347" CornerRadius="6" Padding="16,8" FontWeight="Bold"/>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14">
+                        <Border Background="#F7F5EE" BorderBrush="#E2DDD5" BorderThickness="1" CornerRadius="6" Padding="10">
+                            <TextBox Text="{Binding EvalOutput}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                                     FontFamily="Consolas, Cascadia Code, monospace" FontSize="12" Background="Transparent" BorderThickness="0" Foreground="#1F1E1D"/>
+                        </Border>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <!-- Tab 5: 席位门控与卡密 (Seats & Gate) -->
+            <TabItem Header="🔑 席位门控 (Seats &amp; Gate)">
+                <Grid RowDefinitions="Auto, *" Margin="8">
+                    <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,12">
+                        <Grid ColumnDefinitions="*, Auto">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="席位授权词包与离线卡密激活门控" FontSize="14" FontWeight="Bold" Foreground="#1F1E1D"/>
+                                <TextBlock Text="就地赋能装甲，无需依赖外部网络鉴权，支持一键部署与核验" FontSize="11" Foreground="#797670" Margin="0,4,0,0"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="核验席位 (Verify)" Command="{Binding VerifySeatsCommand}" Background="#CC785C" Foreground="#FFFFFF" BorderBrush="#B86347" CornerRadius="6" Padding="16,8" FontWeight="SemiBold"/>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14">
+                        <Border Background="#F7F5EE" BorderBrush="#E2DDD5" BorderThickness="1" CornerRadius="6" Padding="10">
+                            <TextBox Text="{Binding SeatOutput}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                                     FontFamily="Consolas, Cascadia Code, monospace" FontSize="12" Background="Transparent" BorderThickness="0" Foreground="#1F1E1D"/>
+                        </Border>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="🔐 API Key 授权管理">
+                <Grid RowDefinitions="Auto, Auto, *" Margin="8">
+                    <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,12">
+                        <Grid ColumnDefinitions="Auto, *, Auto, Auto" RowDefinitions="Auto, Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="密钥标签:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding ApiKeyName}" PlaceholderText="例如 Claude Desktop" Margin="0,0,10,0"/>
+                            <Button Grid.Row="0" Grid.Column="2" Content="⚡ 一键生成新密钥" Command="{Binding GenerateApiKeyCommand}" Background="#CC785C" Foreground="#FFFFFF" BorderBrush="#B86347" CornerRadius="6" Padding="16,7" Margin="0,0,8,0"/>
+                            <Button Grid.Row="0" Grid.Column="3" Content="刷新密钥列表" Command="{Binding RefreshApiKeysCommand}" Background="#ECEAE4" Foreground="#2D2B28" BorderBrush="#D8D5CD" CornerRadius="6" Padding="14,7"/>
+                            <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" Text="{Binding ApiKeyStatus}" Foreground="#797670" Margin="0,8,0,0"/>
+                        </Grid>
+                    </Border>
+                    <Grid Grid.Row="1" ColumnDefinitions="*, Auto" Margin="0,0,0,12">
+                        <TextBox Grid.Column="0" Text="{Binding LatestGeneratedApiKey}" IsReadOnly="True" PlaceholderText="新生成的密钥仅显示在这里；请复制并妥善保存" FontFamily="Consolas" Margin="0,0,8,0"/>
+                        <Button Grid.Column="1" Content="📋 一键复制密钥" Command="{Binding CopyApiKeyCommand}" Background="#3D3A36" Foreground="#FFFFFF" BorderBrush="#2B2927" CornerRadius="6" Padding="16,7"/>
+                    </Grid>
+                    <Border Grid.Row="2" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14">
+                        <Grid RowDefinitions="Auto, *, Auto">
+                            <Grid Grid.Row="0" ColumnDefinitions="2*, 2*, 2*, 2*, Auto" Margin="4,0,4,8">
+                                <TextBlock Grid.Column="0" Text="标签" FontWeight="SemiBold"/>
+                                <TextBlock Grid.Column="1" Text="Key（脱敏）" FontWeight="SemiBold"/>
+                                <TextBlock Grid.Column="2" Text="创建时间" FontWeight="SemiBold"/>
+                                <TextBlock Grid.Column="3" Text="状态" FontWeight="SemiBold"/>
+                                <TextBlock Grid.Column="4" Text="选择后可吊销" FontWeight="SemiBold"/>
+                            </Grid>
+                            <ScrollViewer Grid.Row="1">
+                                <ItemsControl ItemsSource="{Binding ApiKeys}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:ApiKeyItem">
+                                            <Grid ColumnDefinitions="2*, 2*, 2*, 2*, Auto" Margin="4,5">
+                                                <TextBlock Grid.Column="0" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding KeyMasked}" FontFamily="Consolas"/>
+                                                <TextBlock Grid.Column="2" Text="{Binding CreatedAt}" TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock Grid.Column="3" Text="{Binding Status}"/>
+                                                <TextBlock Grid.Column="4" Text="{Binding Id}" FontSize="10" Foreground="#797670"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                            <Grid Grid.Row="2" ColumnDefinitions="*, Auto" Margin="0,10,0,0">
+                                <ComboBox Grid.Column="0" ItemsSource="{Binding ApiKeys}" SelectedItem="{Binding SelectedApiKey}" Margin="0,0,10,0">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:ApiKeyItem">
+                                            <TextBlock Text="{Binding Name}"/>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button Grid.Column="1" Content="吊销选中密钥" Command="{Binding RevokeApiKeyCommand}" Background="#C94A4A" Foreground="#FFFFFF" BorderBrush="#B03D3D" CornerRadius="6" Padding="16,7"/>
+                            </Grid>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="💬 历史对话 (History)">
+                <Grid RowDefinitions="Auto, *" Margin="8">
+                    <Grid Grid.Row="0" ColumnDefinitions="*, Auto" Margin="0,0,0,10">
+                        <TextBlock Grid.Column="0" Text="{Binding ConversationStatus}" VerticalAlignment="Center" Foreground="#797670"/>
+                        <Button Grid.Column="1" Content="刷新历史" Command="{Binding RefreshConversationHistoryCommand}" Background="#ECEAE4" Foreground="#2D2B28" BorderBrush="#D8D5CD" CornerRadius="6" Padding="14,7"/>
+                    </Grid>
+                    <Grid Grid.Row="1" ColumnDefinitions="320, *" ColumnSpacing="12">
+                        <Border Grid.Column="0" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="8">
+                            <ListBox ItemsSource="{Binding Conversations}" SelectedItem="{Binding SelectedConversation}">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ConversationSummary">
+                                        <StackPanel Spacing="4" Margin="4,7">
+                                            <TextBlock Text="{Binding UpdatedAt}" FontSize="10" Foreground="#797670"/>
+                                            <TextBlock Text="{Binding Snippet}" FontSize="12" TextWrapping="Wrap" MaxHeight="48"/>
+                                            <TextBlock Text="{Binding Turns, StringFormat='{}{0} 轮'}" FontSize="10" Foreground="#CC785C"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Border>
+                        <Border Grid.Column="1" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="10">
+                            <TextBox Text="{Binding ConversationTranscript}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                                     FontFamily="Consolas, Cascadia Code, monospace" FontSize="12" Background="#F7F5EE" BorderBrush="#E2DDD5"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</Window>

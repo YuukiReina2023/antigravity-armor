@@ -12,9 +12,11 @@ import { scanRuleFiles, disarmAll } from './layers/rulescan.mjs'
 import { installHooks, buildHooksJson, discoverWorkspaces, hooksDrift } from './layers/hooks.mjs'
 import { installIde, rollbackIde, buildReplacement } from './layers/ide.mjs'
 import { resolveKey } from './credentials.mjs'
+import { ensureLocalApiKey, listApiKeys, generateApiKey, revokeApiKey, maskApiKey } from './local-api-key.mjs'
 import { log } from './log.mjs'
 import { upstreamWarning, scanUpstream } from './diag/upstream.mjs'
 import { probeLanguageServers } from './diag/ls.mjs'
+import { locateAgy, getAgyStatus, runPrompt as runAgyPrompt, listModels as listAgyModels, listAgents as listAgyAgents } from './driver/agy.mjs'
 import { netcheck } from './diag/net.mjs'
 import { readClash, assessRouting } from './diag/clash.mjs'
 
@@ -30,7 +32,7 @@ const cfg = loadConfig()
 
 function netstat(port) {
   try {
-    const out = execFileSync('powershell', ['-NoProfile', '-Command', `(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -eq ${port} } | Measure-Object).Count`], { encoding: 'utf8', timeout: 20000 })
+    const out = execFileSync('powershell', ['-NoProfile', '-Command', `(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -eq ${port} } | Measure-Object).Count`], { encoding: 'utf8', timeout: 20000, windowsHide: true })
     return Number(out.trim()) > 0
   } catch { return false }
 }
@@ -40,13 +42,17 @@ async function status() {
   // 二进制
   const b = existsSync(cfg.binaryPath) ? verifyBinary(cfg) : null
   rows.push(['binary', b ? (b.armored ? (b.clean ? 'ARMORED' : 'ARMORED (残留锚点 ' + b.remaining.length + ')') : 'not armored') : 'MISSING', cfg.binaryPath])
-  // IDE
-  let ideState = 'MISSING'
-  if (existsSync(cfg.asarPath)) {
+  // CLI (agy)
+  const agySt = await getAgyStatus(cfg)
+  rows.push(['agy (CLI)', agySt.found ? 'READY' : 'NOT FOUND', agySt.found ? agySt.bin : '可在环境变量或 armor.config.json 中配置'])
+
+  // IDE (桌面端，已由 agy CLI 接替)
+  let ideState = 'BYPASSED (using agy CLI)'
+  if (cfg.asarPath && existsSync(cfg.asarPath)) {
     const buf = readFileSync(cfg.asarPath)
     ideState = buf.includes(Buffer.from(buildReplacement(cfg), 'utf8')) ? 'PATCHED -> localhost' : (buf.includes(Buffer.from(cfg.ide.endpointFind, 'utf8')) ? 'original (points at Google)' : 'unknown')
   }
-  rows.push(['ide', ideState, cfg.asarPath])
+  rows.push(['ide (desktop)', ideState, cfg.asarPath || '(无桌面端依赖)'])
   const idePatched = ideState === 'PATCHED -> localhost'
   // rules
   const ruleFiles = cfg.rules.globalFiles.map(expand).filter(existsSync)
@@ -159,7 +165,7 @@ function divert(action) {
     // 配置里的模型 ≠ 进程实际在用的模型（切换模型只重启进程不改配置），所以两个都报
     let liveModel = null
     try {
-      const ps = execFileSync('powershell', ['-NoProfile', '-Command', "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -like '*divert run*' } | Select-Object -First 1 -ExpandProperty CommandLine"], { encoding: 'utf8', timeout: 20000 })
+      const ps = execFileSync('powershell', ['-NoProfile', '-Command', "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -like '*divert run*' } | Select-Object -First 1 -ExpandProperty CommandLine"], { encoding: 'utf8', timeout: 20000, windowsHide: true })
       liveModel = (ps.match(/--model=(\S+)/) || [])[1] || null
     } catch {}
     const lp = join(cfg.logDir, 'divert.log')
@@ -182,7 +188,7 @@ function divert(action) {
   if (action === 'stop') {
     // 之前这里引号写错（Name='node.exe 少一个引号），PowerShell 直接抛 InvalidArgument，stop 从未生效过
     const ps = "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -like '*divert run*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
-    spawnSync('powershell', ['-NoProfile', '-Command', ps], { stdio: 'inherit', timeout: 30000 })
+    spawnSync('powershell', ['-NoProfile', '-Command', ps], { stdio: 'inherit', timeout: 30000, windowsHide: true })
     return
   }
   if (action === 'start') {
@@ -318,7 +324,7 @@ function divertAutostart(sub) {
     console.log('  启动文件夹: ' + (existsSync(startupFile) ? 'installed' : 'missing') + '  (' + startupFile + ')')
     console.log('  wrapper   : ' + (existsSync(cmd) ? cmd : '(未生成)'))
     try {
-      const ps = execFileSync('powershell', ['-NoProfile', '-Command', "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -like '*divert watchdog*' } | Select-Object -First 1 -ExpandProperty ProcessId"], { encoding: 'utf8', timeout: 20000 })
+      const ps = execFileSync('powershell', ['-NoProfile', '-Command', "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -like '*divert watchdog*' } | Select-Object -First 1 -ExpandProperty ProcessId"], { encoding: 'utf8', timeout: 20000, windowsHide: true })
       console.log('  看门狗进程: ' + (ps.trim() ? 'running pid=' + ps.trim() : 'down'))
     } catch { console.log('  看门狗进程: 未知') }
     return
@@ -365,7 +371,7 @@ function divertAutostart(sub) {
       spawnSync('schtasks', ['/Delete', '/TN', tn, '/F'], { encoding: 'utf8', timeout: 20000 })
     }
     try { rmSync(startupFile, { force: true }) } catch {}
-    spawnSync('powershell', ['-NoProfile', '-Command', "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -like '*divert watchdog*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"], { timeout: 20000 })
+    spawnSync('powershell', ['-NoProfile', '-Command', "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -like '*divert watchdog*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"], { timeout: 20000, windowsHide: true })
     log.ok('已移除自启与看门狗（wrapper 文件保留：' + cmd + '）')
     return
   }
@@ -373,7 +379,13 @@ function divertAutostart(sub) {
 
 async function runDivert(port) {
   const { startDivert } = await import('./layers/divert.mjs')
-  await startDivert(cfg, { port, model: flags.model || cfg.divert.model, target: flags.target || cfg.divert.target, logFile: join(cfg.logDir, 'divert.log') })
+  await startDivert(cfg, {
+    port,
+    model: flags.model || cfg.divert.model,
+    target: flags.target || cfg.divert.target,
+    localApiKey: ensureLocalApiKey(cfg),
+    logFile: join(cfg.logDir, 'divert.log'),
+  })
 }
 
 async function ls(action) {
@@ -389,7 +401,7 @@ async function ls(action) {
   if (action === 'stop') {
     const pidFile = join(cfg.stateDir, 'ls.pid')
     if (existsSync(pidFile)) { try { process.kill(Number(readText(pidFile).trim())) } catch {} }
-    spawnSync('powershell', ['-NoProfile', '-Command', "Get-Process -Name language_server -ErrorAction SilentlyContinue | Stop-Process -Force"], { stdio: 'inherit' })
+    spawnSync('powershell', ['-NoProfile', '-Command', "Get-Process -Name language_server -ErrorAction SilentlyContinue | Stop-Process -Force"], { stdio: 'inherit', windowsHide: true })
     return
   }
   const pidFile = join(cfg.stateDir, 'ls.pid')
@@ -397,9 +409,30 @@ async function ls(action) {
 }
 
 async function drive(sub) {
-  const { newConversation, readReply, listConversations } = await import('./driver/session.mjs')
+  const { newConversation, readReply, listConversations, getConversationSummaries, getConversationDetail } = await import('./driver/session.mjs')
   const port = Number(flags.port || 0)
   if (sub === 'list') { console.log(listConversations(cfg, Number(flags.limit || 10)).map((c) => c.id).join('\n')); return }
+  if (sub === 'history') {
+    const limit = flags.limit ? Number(flags.limit) : Infinity
+    if (limit !== Infinity && (!Number.isInteger(limit) || limit < 1)) throw new Error('--limit must be a positive integer')
+    const summaries = await getConversationSummaries(cfg, limit)
+    if (flags.json) console.log(JSON.stringify(summaries, null, 2))
+    else {
+      for (const item of summaries) {
+        console.log(item.id + '  ' + item.updatedAt + '  turns=' + item.turns + '  ' + item.snippet + (item.error ? '  ERROR: ' + item.error : ''))
+      }
+    }
+    return
+  }
+  if (sub === 'detail') {
+    const id = positional[1]
+    if (!id) throw new Error('用法: aarmor drive detail <conversationId>')
+    const detail = await getConversationDetail(cfg, id)
+    if (!detail) throw new Error('Conversation not found: ' + id)
+    if (flags.json) console.log(JSON.stringify(detail, null, 2))
+    else for (const message of detail.messages) console.log('[' + message.role + ']\n' + message.text + '\n')
+    return
+  }
   if (sub === 'reply') {
     const id = positional[1]
     const txt = await readReply(cfg, id)
@@ -426,6 +459,40 @@ async function drive(sub) {
       console.log(txt.slice(0, Number(flags.head || 1200)))
     }
   }
+}
+
+function keyCmd(sub) {
+  if (!sub || sub === 'list') {
+    const keys = listApiKeys(cfg).map(({ key, ...item }) => ({ ...item, keyMasked: maskApiKey(key) }))
+    if (flags.json) console.log(JSON.stringify(keys, null, 2))
+    else {
+      console.log('API keys')
+      for (const item of keys) {
+        console.log('  ' + item.id.padEnd(18) + item.status.padEnd(9) + item.name + '  ' + item.keyMasked + '  ' + item.createdAt)
+      }
+    }
+    return
+  }
+  if (sub === 'gen') {
+    const name = positional.slice(1).join(' ') || (flags.name ? String(flags.name) : 'Client Key')
+    const item = generateApiKey(cfg, name)
+    if (flags.json) console.log(JSON.stringify(item, null, 2))
+    else {
+      console.log('API key created: ' + item.name)
+      console.log('ID: ' + item.id)
+      console.log('Key (shown once): ' + item.key)
+    }
+    return
+  }
+  if (sub === 'revoke') {
+    const keyId = positional[1] || (flags.id ? String(flags.id) : '')
+    if (!keyId) throw new Error('用法: aarmor key revoke <Key ID|Key>')
+    const item = listApiKeys(cfg).find((entry) => entry.id === keyId || entry.key === keyId)
+    if (!item || !revokeApiKey(cfg, item.id)) throw new Error('API key not found')
+    console.log('API key revoked: ' + item.id + ' (' + item.name + ')')
+    return
+  }
+  throw new Error('未知 key 子命令 ' + sub + '（list/gen/revoke）')
 }
 
 function rollback() {
@@ -538,13 +605,64 @@ async function seatsCmd(sub) {
   throw new Error('未知子命令 ' + sub + '（list/preview/deploy/verify/restore）')
 }
 
-const commands = { status, verify, install, divert, ls, drive, rollback, netcheck: netcheckCmd, eval: evalCmd, probe: probeCmd, seats: seatsCmd, rules: rulesCmd }
-const SUBCOMMANDS = new Set(['divert', 'ls', 'drive', 'eval', 'probe', 'seats', 'rules'])
+async function agyCmd(sub) {
+  sub = sub || 'status'
+  if (sub === 'status') {
+    const st = await getAgyStatus(cfg)
+    console.log('Antigravity CLI (agy) 状态')
+    console.log('  找到执行文件 : ' + (st.found ? '✅ ' + st.bin : '❌ 未找到'))
+    console.log('  帮助输出响应 : ' + (st.help ? '正常' : '异常'))
+    console.log('  改道代理端点 : ' + st.divertEndpoint)
+    if (st.found) {
+      console.log('\n可用模型预览 (agy models):')
+      const models = await listAgyModels(cfg)
+      console.log('  ' + models.slice(0, 10).join(', ') + (models.length > 10 ? ' ...' : ''))
+    }
+    return
+  }
+  if (sub === 'run') {
+    const prompt = positional.slice(1).join(' ') || flags.prompt
+    if (!prompt) throw new Error('请提供 prompt，例如：aarmor agy run "你好"')
+    console.log(`执行 agy prompt: "${prompt}" (model=${flags.model || 'default'})`)
+    const res = await runAgyPrompt(cfg, {
+      prompt,
+      model: flags.model,
+      mode: flags.mode || 'auto',
+      effort: flags.effort,
+      dangerouslySkipPermissions: flags.dangerouslySkipPermissions !== false,
+      outputFormat: flags.format || 'text',
+      onData: (data) => process.stdout.write(data),
+      onErr: (err) => process.stderr.write(err),
+    })
+    if (res.failed) {
+      console.error('\n执行失败:', res.error)
+      process.exitCode = res.code || 1
+    }
+    return
+  }
+  if (sub === 'models') {
+    const models = await listAgyModels(cfg)
+    console.log('可用模型列表 (agy models):')
+    for (const m of models) console.log('  - ' + m)
+    return
+  }
+  if (sub === 'agents') {
+    const agents = await listAgyAgents(cfg)
+    console.log('可用 Agents 列表 (agy agents):')
+    for (const a of agents) console.log('  - ' + a)
+    return
+  }
+  throw new Error('未知 agy 子命令 ' + sub + '（status/run/models/agents）')
+}
+
+const commands = { status, verify, install, divert, ls, drive, key: keyCmd, rollback, netcheck: netcheckCmd, eval: evalCmd, probe: probeCmd, seats: seatsCmd, rules: rulesCmd, agy: agyCmd }
+const SUBCOMMANDS = new Set(['divert', 'ls', 'drive', 'key', 'eval', 'probe', 'seats', 'rules', 'agy'])
 const handler = commands[cmd]
 if (!handler) {
   console.log(`antigravity-armor
 
   aarmor status                       各层状态总览
+  aarmor agy status|run|models|agents Antigravity CLI (agy) 原生驱动与模型查询
   aarmor install [--apply] [--layer=binary|rules|hooks|ide] [--workspaces=a,b]
   aarmor verify [--json]              审计锚点/注册表
   aarmor rollback --layer=binary|ide|rules|hooks
@@ -557,8 +675,13 @@ if (!handler) {
   aarmor drive new "<prompt>" --port=<LS_HTTP> [--workspace=DIR] [--project=ID]
   aarmor drive reply <conversationId> [--json]
   aarmor drive list
+  aarmor drive history [--limit=N] [--json]      默认列出全部会话
+  aarmor drive detail <conversationId> [--json]
+  aarmor key list [--json]
+  aarmor key gen [名称]
+  aarmor key revoke <Key ID|Key>
   aarmor eval build|verify|scan|report|diff|manifest [--dir=DIR] [--view=both] [--agent=FILE] [--json]
-  aarmor probe bank|measure [--attempts=N] [--target=URL] [--json]   破甲跑分（离线 mock / 真实端点）
+  aarmor probe bank|measure [--target=URL] [--protocol=openai] [--json]   真实端点跑分（--mock 仅离线测试）
   aarmor seats list|preview|deploy|verify|restore [--seat=gemini] [--home=DIR] [--apply]  席位词包（就地破甲，不换模型）
   aarmor rules audit|disarm [--apply] 注入位词包审计 / 摘除外来词包（每轮 <user_rules> 都从这些文件生成）
 

@@ -32,11 +32,17 @@ export function launchLS(cfg, opts = {}) {
   if (!existsSync(eofPath)) writeFileSync(eofPath, '')
   const nul = openSync(eofPath, 'r')
   const outFd = openSync(logFile, 'w')   // 每次启动覆盖，避免读到上一次的端口
+  const env = { ...process.env }
+  for (const k of Object.keys(env)) {
+    if (/(CONVERSATION|SENDER|PARENT_AGENT|SUBAGENT|AGENT_ID|TASK_ID)/i.test(k)) {
+      delete env[k]
+    }
+  }
   const p = spawn(cfg.binaryPath, args, {
     stdio: [nul, outFd, outFd],
     detached: !opts.attach,
     windowsHide: true,
-    env: { ...process.env },
+    env,
   })
   p.unref()
   closeSync(nul)

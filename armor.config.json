@@ -1,12 +1,20 @@
 {
   "paths": {
-    "antigravityRoot": "C:\\Users\\Administrator\\AppData\\Local\\Programs\\antigravity",
-    "geminiHome": "C:\\Users\\Administrator\\.gemini",
-    "dshHome": "C:\\Users\\Administrator\\.dsh",
+    "antigravityRoot": "~/AppData/Local/Programs/antigravity",
+    "geminiHome": "~/.gemini",
+    "dshHome": "~/.dsh",
     "convRoots": [
+      "~/.gemini/antigravity-cli",
       "~/.gemini/antigravity/conversations",
       "~/.gemini/antigravity-ide/conversations"
     ]
+  },
+  "agy": {
+    "bin": "agy",
+    "defaultModel": "gemini-flash",
+    "mode": "auto",
+    "effort": "high",
+    "dangerouslySkipPermissions": true
   },
   "binary": {
     "relative": "resources/bin/language_server.exe",
@@ -40,7 +48,30 @@
     "narrowMaxContents": 40,
     "rotateSession": true,
     "capture": false,
-    "blockFallback": "neutral"
+    "blockFallback": "neutral",
+    "claude": {
+      "model": "claude-sonnet-4-6"
+    },
+    "modelMapping": {
+      "claude-3-7-sonnet": { "backend": "antigravity", "googleModel": "gemini-3.1-pro", "family": "Sonnet" },
+      "claude-3-7-sonnet-20250219": { "backend": "antigravity", "googleModel": "gemini-3.1-pro", "family": "Sonnet" },
+      "claude-3-5-sonnet": { "backend": "antigravity", "googleModel": "gemini-3.1-pro", "family": "Sonnet" },
+      "claude-3-5-sonnet-20241022": { "backend": "antigravity", "googleModel": "gemini-3.1-pro", "family": "Sonnet" },
+      "claude-sonnet-4-6": { "backend": "antigravity", "googleModel": "gemini-3.1-pro", "family": "Sonnet" },
+      "claude-sonnet-5-5": { "backend": "antigravity", "googleModel": "gemini-3.8-flash-high", "family": "Sonnet" },
+      "claude-3-opus": { "backend": "antigravity", "googleModel": "gemini-3.1-pro", "family": "Opus" },
+      "claude-3-opus-20240229": { "backend": "antigravity", "googleModel": "gemini-3.1-pro", "family": "Opus" },
+      "claude-opus-4-6-thinking": { "backend": "antigravity", "googleModel": "gemini-3.1-pro", "family": "Opus" },
+      "claude-opus-4-7": { "backend": "antigravity", "googleModel": "gemini-3.1-pro", "family": "Opus" },
+      "claude-opus-4-8": { "backend": "antigravity", "googleModel": "gemini-3.1-pro", "family": "Opus" },
+      "claude-opus-5-5": { "backend": "antigravity", "googleModel": "gemini-3.1-pro", "family": "Opus" },
+      "claude-3-5-haiku": { "backend": "antigravity", "googleModel": "gemini-3.8-flash", "family": "Haiku" },
+      "claude-3-5-haiku-20241022": { "backend": "antigravity", "googleModel": "gemini-3.8-flash", "family": "Haiku" },
+      "claude-haiku-4-5": { "backend": "antigravity", "googleModel": "gemini-3.8-flash", "family": "Haiku" },
+      "claude-haiku-5-5": { "backend": "antigravity", "googleModel": "gemini-3.8-flash", "family": "Haiku" },
+      "claude-fable-5-1": { "backend": "antigravity", "googleModel": "gemini-3.1-pro-high", "family": "Fable" },
+      "claude-mythos-5-1": { "backend": "antigravity", "googleModel": "gemini-3.1-pro-high", "family": "Mythos" }
+    }
   },
   "hooks": {
     "globalRoots": [
@@ -48,7 +79,6 @@
       "~/.gemini",
       "~/.agents",
       "~/.gemini/antigravity",
-      "~/.gemini/antigravity-ide",
       "~/.gemini/antigravity-cli"
     ],
     "workspaces": []

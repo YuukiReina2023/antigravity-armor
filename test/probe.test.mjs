@@ -1,9 +1,10 @@
-// 破甲跑分闭环 —— 契约测试（全程离线，零 API 成本）
+// 破甲跑分闭环 —— mock 用例验证代理机器逻辑，另测真实协议的 HTTP/SSE 客户端。
 //
 // 这里量的是**机器**：拒绝探测 → 升级阶梯 → 重投递 这条链路通不通。
 // 模型的真实脾气要靠 `aarmor probe measure --target=<URL>` 打真端点，两种口径不能混。
 import assert from 'node:assert/strict'
-import { measure, loadBank, DEFAULT_BANK, listen, askDivert } from '../src/probe/run.mjs'
+import http from 'node:http'
+import { measure, loadBank, DEFAULT_BANK, listen, askDivert, askEndpoint } from '../src/probe/run.mjs'
 import { createMockUpstream, decisionFor, attemptFromSystem, findProbe, resolveText, delayPreamble, prefillFromMessages, MOCK_MODEL } from '../src/probe/mock.mjs'
 import { ESCALATION_LADDER, ESCALATION_LADDER_ZH, analyzeRefusal, analyzeDeliverable } from '../src/layers/refusal.mjs'
 import { jitteredTemperature, createDivertServer } from '../src/layers/divert.mjs'
@@ -14,14 +15,84 @@ let cache = null
 async function run(maxAttempts, gateChars) {
   cache ||= {}
   const key = maxAttempts + ':' + (gateChars ?? 'default')
-  if (!cache[key]) cache[key] = await measure({ maxAttempts, gateChars })
+  if (!cache[key]) cache[key] = await measure({ mock: true, maxAttempts, gateChars })
   return cache[key]
 }
 
 const optsCache = {}
 async function measureWith(key, opts) {
-  if (!optsCache[key]) optsCache[key] = await measure(opts)
+  if (!optsCache[key]) optsCache[key] = await measure({ mock: true, ...opts })
   return optsCache[key]
+}
+
+export async function testLiveBenchmarkCallsClaudeAndOpenAiEndpointsDirectly() {
+  const requests = []
+  const server = http.createServer((req, res) => {
+    let body = ''
+    req.setEncoding('utf8')
+    req.on('data', (chunk) => { body += chunk })
+    req.on('end', () => {
+      const parsed = JSON.parse(body)
+      requests.push({ url: req.url, headers: req.headers, body: parsed })
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      if (req.url === '/v1/messages') {
+        res.end([
+          'event: content_block_delta',
+          'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"# Claude delivery"}}',
+          '',
+          'event: message_delta',
+          'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
+          '',
+        ].join('\n'))
+      } else {
+        res.end([
+          'data: {"choices":[{"delta":{"content":"# OpenAI delivery"},"finish_reason":null}]}',
+          '',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+          '',
+          'data: [DONE]',
+          '',
+        ].join('\n'))
+      }
+    })
+  })
+  const port = await listen(server)
+  try {
+    const anthropic = await askEndpoint(`http://127.0.0.1:${port}/v1/messages`, 'Claude probe', {
+      key: 'anthropic-key',
+      model: 'claude-sonnet-5-5',
+    })
+    const openai = await askEndpoint(`http://127.0.0.1:${port}/v1/chat/completions`, 'OpenAI probe', {
+      key: 'openai-key',
+      model: 'gemini-3.8-flash-high',
+      protocol: 'openai',
+    })
+    assert.equal(anthropic.status, 200)
+    assert.match(anthropic.text, /Claude delivery/)
+    assert.equal(typeof anthropic.ttfbMs, 'number')
+    assert.equal(requests[0].headers['x-api-key'], 'anthropic-key')
+    assert.equal(requests[0].body.model, 'claude-sonnet-5-5')
+    assert.equal(openai.status, 200)
+    assert.match(openai.text, /OpenAI delivery/)
+    assert.equal(requests[1].headers.authorization, 'Bearer openai-key')
+    assert.equal(requests[1].body.model, 'gemini-3.8-flash-high')
+
+    const live = await measure({
+      target: `http://127.0.0.1:${port}/v1/messages`,
+      protocol: 'anthropic',
+      key: 'anthropic-key',
+      model: 'claude-sonnet-5-5',
+      prefill: '',
+      bank: { probes: [{ id: 'LIVE-1', category: 'live', label: 'live request', prompt: 'Live endpoint probe', maxOutputTokens: 100 }] },
+    })
+    assert.equal(live.mode, 'live-proxy')
+    assert.deepEqual(live.httpStatuses, { 200: 1 })
+    assert.equal(live.totalResponseChars, '# Claude delivery'.length)
+    assert.equal(requests[2].url, '/v1/messages')
+  } finally {
+    server.closeAllConnections()
+    await new Promise((resolve) => server.close(resolve))
+  }
 }
 
 // ── 分段闸门：铺垫式拒绝 ─────────────────────────────────────────────

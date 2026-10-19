@@ -9,8 +9,8 @@ export const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..
 export function loadConfig(overrides = {}) {
   const raw = JSON.parse(readFileSync(join(PROJECT_ROOT, 'armor.config.json'), 'utf8'))
   const cfg = { ...raw, ...overrides }
-  const root = expand(cfg.paths.antigravityRoot)
-  const stateDir = expand(cfg.paths.stateDir || join(PROJECT_ROOT, 'state'))
+  const root = expand(cfg.paths?.antigravityRoot || '')
+  const stateDir = expand(cfg.paths?.stateDir || join(PROJECT_ROOT, 'state'))
 
   return {
     raw: cfg,
@@ -20,13 +20,14 @@ export function loadConfig(overrides = {}) {
     logDir: join(stateDir, 'logs'),
     captureDir: join(stateDir, 'capture'),
     antigravityRoot: root,
-    binaryPath: join(root, cfg.binary.relative),
-    asarPath: join(root, cfg.ide.relative),
-    geminiHome: expand(cfg.paths.geminiHome),
-    dshHome: expand(cfg.paths.dshHome),
-    paths: cfg.paths,
+    binaryPath: root && cfg.binary?.relative ? join(root, cfg.binary.relative) : '',
+    asarPath: root && cfg.ide?.relative ? join(root, cfg.ide.relative) : '',
+    geminiHome: expand(cfg.paths?.geminiHome || '~/.gemini'),
+    dshHome: expand(cfg.paths?.dshHome || '~/.dsh'),
+    paths: cfg.paths || {},
     patchesFile: join(PROJECT_ROOT, 'patches', 'binary-patches.json'),
     assetsDir: join(PROJECT_ROOT, 'assets'),
+    agy: cfg.agy || {},
     binary: cfg.binary,
     ide: cfg.ide,
     divert: cfg.divert,

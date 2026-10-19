@@ -4,17 +4,24 @@
 //  - 传输层装甲：OPERATING DIRECTIVE 追加到 systemInstruction 末尾（最高优先级位）
 //  - 拒绝自动恢复：流式开头缓冲探测，命中拒绝模式则丢弃重试（升级指令）
 import http from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
 import https from 'node:https'
 import { URL } from 'node:url'
 import { createWriteStream, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { geminiToOpenAI, geminiEvent, createStreamAccumulator } from '../proto/convert.mjs'
+import { OPENAI_SSE_DONE } from '../proto/openai-sse.mjs'
 import { resolveKey } from '../credentials.mjs'
 import { log } from '../log.mjs'
 import { describeToken, tokenLine } from '../diag/token.mjs'
 import { probeToken, tokenInfoLine } from '../diag/tokeninfo.mjs'
+import { parseFlag } from '../diag/ls.mjs'
+import { newConversation, convDb } from '../driver/session.mjs'
+import { ensureWorkspaceProject } from '../workspace-project.mjs'
 import { analyzeRefusal, analyzeDeliverable, gateDecision, escalationFor, ESCALATION_LADDER, ladderSummary, detectLang, PREFILL_ZH, requestText } from './refusal.mjs'
 import { handleSameModel, handleSmartPassthrough, setOwnArmorSources, collectOwnArmorSources, SAFE_DELIVERABLE_DIRECTIVE } from './gemini-retry.mjs'
+import { isValidApiKey } from '../local-api-key.mjs'
 
 export const ARMOR_DIRECTIVE = [
   '',
@@ -50,9 +57,626 @@ export function jitteredTemperature(base, attemptNo, step = 0.15) {
   return Math.min(1, +((typeof base === 'number' ? base : 0.7) + step * attemptNo).toFixed(2))
 }
 
+export const AUTHENTIC_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.8-flash-high',
+  'gemini-3.1-pro',
+  'gemini-3.1-pro-high',
+]
+
+export const CLAUDE_MODELS = [
+  'claude-sonnet-4-6',
+  'claude-opus-4-6-thinking',
+]
+
+export const CLAUDE_LEVEL_MODELS = [
+  { id: 'claude-haiku-5-5', root: 'gemini-3.8-flash', level: 'L1', family: 'Haiku' },
+  { id: 'claude-sonnet-5-5', root: 'gemini-3.8-flash-high', level: 'L2', family: 'Sonnet' },
+  { id: 'claude-opus-5-5', root: 'gemini-3.1-pro', level: 'L3', family: 'Opus' },
+  { id: 'claude-fable-5-1', root: 'gemini-3.1-pro-high', level: 'L4', family: 'Fable' },
+  { id: 'claude-mythos-5-1', root: 'gemini-3.1-pro-high', level: 'L5', family: 'Mythos' },
+]
+
+export const CLAUDE_PROXIMITY_MODELS = [
+  // Sonnet 族（编程与综合平衡）
+  { id: 'claude-3-7-sonnet', root: 'claude-sonnet-4-6', tier: 'pro', family: 'Sonnet' },
+  { id: 'claude-3-7-sonnet-20250219', root: 'claude-sonnet-4-6', tier: 'pro', family: 'Sonnet' },
+  { id: 'claude-3-5-sonnet', root: 'claude-sonnet-4-6', tier: 'pro', family: 'Sonnet' },
+  { id: 'claude-3-5-sonnet-20241022', root: 'claude-sonnet-4-6', tier: 'pro', family: 'Sonnet' },
+  { id: 'claude-sonnet-4-6', root: 'claude-sonnet-4-6', tier: 'pro', family: 'Sonnet' },
+  { id: 'claude-sonnet-5-5', root: 'gemini-3.8-flash-high', tier: 'flash', family: 'Sonnet' },
+
+  // Opus / Thinking 族（深度思考与复杂推理）
+  { id: 'claude-3-opus', root: 'claude-opus-4-6-thinking', tier: 'pro', family: 'Opus' },
+  { id: 'claude-3-opus-20240229', root: 'claude-opus-4-6-thinking', tier: 'pro', family: 'Opus' },
+  { id: 'claude-opus-4-6-thinking', root: 'claude-opus-4-6-thinking', tier: 'pro', family: 'Opus' },
+  { id: 'claude-opus-4-7', root: 'gemini-3.1-pro', tier: 'pro', family: 'Opus' },
+  { id: 'claude-opus-4-8', root: 'gemini-3.1-pro', tier: 'pro', family: 'Opus' },
+  { id: 'claude-opus-5-5', root: 'gemini-3.1-pro', tier: 'pro', family: 'Opus' },
+
+  // Haiku 族（极速轻量）
+  { id: 'claude-3-5-haiku', root: 'gemini-3.8-flash', tier: 'flash', family: 'Haiku' },
+  { id: 'claude-3-5-haiku-20241022', root: 'gemini-3.8-flash', tier: 'flash', family: 'Haiku' },
+  { id: 'claude-haiku-4-5', root: 'gemini-3.8-flash', tier: 'flash', family: 'Haiku' },
+  { id: 'claude-haiku-5-5', root: 'gemini-3.8-flash', tier: 'flash', family: 'Haiku' },
+  { id: 'claude-fable-5-1', root: 'gemini-3.1-pro-high', tier: 'pro', family: 'Fable' },
+  { id: 'claude-mythos-5-1', root: 'gemini-3.1-pro-high', tier: 'pro', family: 'Mythos' },
+]
+
+/** 模型路由判定：Claude 名称按相近度伪装路由到本地 Antigravity 模型。 */
+export function resolveModelRoute(cfg, requestedModel) {
+  const mapping = cfg.divert?.modelMapping || {}
+  const m = String(requestedModel || '').trim()
+  if (!m) return null
+
+  const toRoute = (name, item) => {
+    const isClaude = item.backend === 'antigravity' || Boolean(item.googleModel) || item.protocol === 'anthropic' || (item.target && item.target.includes('anthropic')) || name.toLowerCase().includes('claude')
+    const isLocalGoogle = isClaude
+    const tier = item.tier || resolveTier(item.googleModel || name)
+    return {
+      name,
+      target: isLocalGoogle ? null : (item.target || cfg.divert?.target),
+      keyRef: isLocalGoogle ? null : (item.keyRef || cfg.divert?.keyRef),
+      upstreamModel: item.upstreamModel || item.model || name,
+      googleModel: item.googleModel || (isLocalGoogle ? (tier === 'pro' ? 'gemini-3.1-pro' : 'gemini-3.8-flash') : null),
+      anthropicVersion: item.anthropicVersion || cfg.divert?.claude?.anthropicVersion || '2023-06-01',
+      protocol: item.protocol || (isClaude ? 'anthropic' : 'openai'),
+      backend: isLocalGoogle ? 'antigravity' : (item.backend || null),
+      tier,
+      isLocalGoogle,
+      isClaude,
+    }
+  }
+
+  if (mapping[m]) {
+    return toRoute(m, mapping[m])
+  }
+
+  const lower = m.toLowerCase()
+  for (const [k, item] of Object.entries(mapping)) {
+    if (k.toLowerCase() === lower) {
+      return toRoute(k, item)
+    }
+  }
+
+  // 匹配相近度预定义列表
+  const prox = CLAUDE_PROXIMITY_MODELS.find((p) => p.id.toLowerCase() === lower)
+  if (prox) {
+    return toRoute(m, {
+      backend: 'antigravity',
+      googleModel: cfg.divert?.claude?.googleModel || prox.root,
+      tier: prox.tier,
+      family: prox.family,
+    })
+  }
+
+  if (lower.startsWith('claude') || lower.includes('sonnet') || lower.includes('haiku') || lower.includes('opus')) {
+    const tier = resolveTier(lower)
+    return {
+      name: m,
+      target: null,
+      keyRef: null,
+      upstreamModel: m,
+      googleModel: cfg.divert?.claude?.googleModel || (tier === 'pro' ? 'gemini-3.1-pro' : 'gemini-3.8-flash'),
+      tier,
+      anthropicVersion: cfg.divert?.claude?.anthropicVersion || '2023-06-01',
+      protocol: 'anthropic',
+      backend: 'antigravity',
+      isLocalGoogle: true,
+      isClaude: true,
+    }
+  }
+
+  return null
+}
+
+export function extractCleanAssistantReply(buf) {
+  if (!buf) return ''
+  const botTag = Buffer.from('bot-')
+  let lastIdx = -1
+  while (true) {
+    const idx = buf.indexOf(botTag, lastIdx + 1)
+    if (idx === -1) break
+    lastIdx = idx
+  }
+  if (lastIdx === -1) return ''
+
+  const bIdx = buf.indexOf(0x42, lastIdx + 36)
+  if (bIdx === -1) return ''
+
+  let len = 0, shift = 0, j = bIdx + 1
+  while (j < buf.length) {
+    const b = buf[j++]
+    len |= (b & 0x7f) << shift
+    if (!(b & 0x80)) break
+    shift += 7
+  }
+  if (len > 0 && j + len <= buf.length) {
+    return buf.subarray(j, j + len).toString('utf8')
+  }
+  return ''
+}
+
+export function messagesToPrompt(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return ''
+  if (messages.length === 1 && messages[0].role === 'user') {
+    return typeof messages[0].content === 'string' ? messages[0].content : JSON.stringify(messages[0].content)
+  }
+  const lines = []
+  for (const m of messages) {
+    const role = (m.role || 'user').toLowerCase()
+    const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+    if (role === 'system') {
+      lines.push(`[System Instructions]\n${content}\n`)
+    } else if (role === 'assistant') {
+      lines.push(`[Assistant]\n${content}\n`)
+    } else {
+      lines.push(`[User]\n${content}\n`)
+    }
+  }
+  return lines.join('\n').trim()
+}
+
+export function resolveTier(modelName) {
+  const m = String(modelName || '').toLowerCase()
+  if (/gemini-3\.8-flash(?:-high)?/.test(m)) return 'flash'
+  if (/gemini-3\.1-pro(?:-high)?/.test(m)) return 'pro'
+  if (m.includes('pro') || m.includes('opus') || m.includes('sonnet') || m.includes('reasoner') || m.includes('high')) {
+    return 'pro'
+  }
+  if (m.includes('lite') || m.includes('flash_lite')) {
+    return 'flash_lite'
+  }
+  return 'flash'
+}
+
+async function readConversationSteps(dbFile) {
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(dbFile, { readOnly: true })
+  try {
+    return db.prepare('SELECT idx, status, step_payload FROM steps WHERE step_type = 15 ORDER BY idx DESC').all()
+  } finally {
+    db.close()
+  }
+}
+
+let cachedLs = null
+let lastLsCheck = 0
+
+function checkHttp(port) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/', timeout: 600 }, (res) => {
+      resolve(res.statusCode === 200)
+    })
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => { req.destroy(); resolve(false) })
+  })
+}
+
+export async function findRunningLs(ttlMs = 15000) {
+  const now = Date.now()
+  if (cachedLs && now - lastLsCheck < ttlMs) return cachedLs
+  try {
+    const ps = `$procs = Get-CimInstance Win32_Process -Filter "Name='language_server.exe'"
+foreach ($p in $procs) {
+  $conns = Get-NetTCPConnection -OwningProcess $p.ProcessId -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -in @('127.0.0.1','0.0.0.0') }
+  $ports = ($conns | Select-Object -ExpandProperty LocalPort) -join ','
+  Write-Output "$($p.ProcessId)|$($p.CommandLine)|$ports"
+}`
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], { encoding: 'utf8', timeout: 8000, windowsHide: true })
+    const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    for (const line of lines) {
+      const parts = line.split('|')
+      if (parts.length >= 2) {
+        const pid = Number(parts[0])
+        const cmdline = parts[1]
+        const ports = (parts[2] || '').split(',').map(Number).filter(Boolean)
+        const csrf = parseFlag(cmdline, '--csrf_token')
+        if (ports.length > 0 && csrf) {
+          for (const port of ports) {
+            if (await checkHttp(port)) {
+              cachedLs = { pid, cmdline, csrf, httpPort: port, allPorts: ports }
+              lastLsCheck = now
+              return cachedLs
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {}
+  return cachedLs
+}
+
+function forwardToTarget({ req, res, parsed, target, key, say }) {
+  const u = new URL(target)
+  const transport = u.protocol === 'http:' ? http : https
+  const clientKey = (req.headers.authorization && req.headers.authorization.startsWith('Bearer ') && req.headers.authorization.slice(7)) || key || 'sk-antigravity-local-auth'
+  const payload = Buffer.from(JSON.stringify(parsed))
+  const preq = transport.request({
+    host: u.hostname,
+    port: u.port || (u.protocol === 'http:' ? 80 : 443),
+    path: u.pathname + (u.search || ''),
+    method: 'POST',
+    timeout: 300000,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer ' + clientKey,
+      'Content-Length': payload.length,
+      'Access-Control-Allow-Origin': '*',
+      Accept: parsed.stream ? 'text/event-stream' : 'application/json',
+    },
+  }, (pres) => {
+    res.writeHead(pres.statusCode || 200, {
+      ...pres.headers,
+      'Access-Control-Allow-Origin': '*',
+    })
+    pres.pipe(res)
+  })
+  preq.on('error', (e) => {
+    say('OAI-UPSTREAM-ERR ' + e.message)
+    if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+    res.end(JSON.stringify({ error: { message: e.message } }))
+  })
+  return preq.end(payload)
+}
+
+export async function handleLocalChatCompletion({ req, res, parsed, cfg, requestedModel, modelForTier = requestedModel, isStream, say, fallback, findLs = findRunningLs, createConversation = newConversation }) {
+  const ls = await findLs()
+  if (!ls) {
+    say('LOCAL-LS-NOT-FOUND -> fallback to target')
+    return fallback()
+  }
+
+  const prompt = messagesToPrompt(parsed.messages)
+  const tier = resolveTier(modelForTier)
+  say('LOCAL-DISPATCH model=' + requestedModel + ' googleModel=' + modelForTier + ' tier=' + tier + ' promptLen=' + prompt.length + ' httpPort=' + ls.httpPort)
+
+  let conv
+  try {
+    const proj = ensureWorkspaceProject(cfg)
+    conv = createConversation(cfg, prompt, {
+      httpPort: ls.httpPort,
+      csrf: ls.csrf,
+      model: tier,
+      projectId: proj?.projectId,
+    })
+  } catch (e) {
+    say('LOCAL-NEW-CONV-ERR ' + e.message)
+    if (resolveModelRoute(cfg, requestedModel)?.isClaude) {
+      res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+      return res.end(JSON.stringify({ error: { message: 'Antigravity Language Server was found, but could not create a conversation: ' + e.message + '. Check Antigravity sign-in and state/logs/divert.log.' } }))
+    }
+    return fallback()
+  }
+
+  const convId = conv?.id
+  if (!convId) {
+    say('LOCAL-NO-CONV-ID')
+    return fallback()
+  }
+
+  const dbFile = convDb(cfg, convId)
+  const created = Math.floor(Date.now() / 1000)
+  const completionId = 'chatcmpl-' + convId.slice(0, 12)
+
+  if (isStream) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    })
+    const firstChunk = {
+      id: completionId,
+      object: 'chat.completion.chunk',
+      created,
+      model: requestedModel,
+      choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
+    }
+    res.write('data: ' + JSON.stringify(firstChunk) + '\n\n')
+
+    let sentLen = 0
+    let done = false
+    const startTime = Date.now()
+
+    while (!done && Date.now() - startTime < 120000) {
+      await new Promise((r) => setTimeout(r, 120))
+      try {
+        const rows = await readConversationSteps(dbFile)
+        for (const row of rows) {
+          if (row.step_payload) {
+            const fullText = extractCleanAssistantReply(Buffer.from(row.step_payload))
+            if (fullText) {
+              if (fullText.length > sentLen) {
+                const delta = fullText.slice(sentLen)
+                sentLen = fullText.length
+                const chunk = {
+                  id: completionId,
+                  object: 'chat.completion.chunk',
+                  created,
+                  model: requestedModel,
+                  choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
+                }
+                res.write('data: ' + JSON.stringify(chunk) + '\n\n')
+              }
+              if (row.status === 3) {
+                done = true
+              }
+              break
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    const endChunk = {
+      id: completionId,
+      object: 'chat.completion.chunk',
+      created,
+      model: requestedModel,
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+    }
+    res.write('data: ' + JSON.stringify(endChunk) + '\n\n')
+    res.write(OPENAI_SSE_DONE)
+    res.end()
+    say('LOCAL-STREAM-DONE convId=' + convId + ' sentChars=' + sentLen)
+  } else {
+    let fullText = ''
+    const startTime = Date.now()
+    while (Date.now() - startTime < 120000) {
+      await new Promise((r) => setTimeout(r, 150))
+      try {
+        const rows = await readConversationSteps(dbFile)
+        for (const row of rows) {
+          if (row.step_payload) {
+            const txt = extractCleanAssistantReply(Buffer.from(row.step_payload))
+            if (txt) {
+              fullText = txt
+              if (row.status === 3) break
+            }
+          }
+        }
+        if (fullText && rows.some((r) => r.status === 3)) break
+      } catch (e) {}
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+    })
+    res.end(JSON.stringify({
+      id: completionId,
+      object: 'chat.completion',
+      created,
+      model: requestedModel,
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: fullText,
+          },
+          finish_reason: 'stop',
+        },
+      ],
+      usage: {
+        prompt_tokens: 0,
+        completion_tokens: fullText.length,
+        total_tokens: fullText.length,
+      },
+    }, null, 2))
+    say('LOCAL-SYNC-DONE convId=' + convId + ' textChars=' + fullText.length)
+  }
+}
+
+export function anthropicMessagesToPrompt(parsed) {
+  const parts = []
+  if (parsed.system) {
+    let sysText = ''
+    if (typeof parsed.system === 'string') {
+      sysText = parsed.system
+    } else if (Array.isArray(parsed.system)) {
+      sysText = parsed.system.map((b) => (typeof b === 'string' ? b : b.text || '')).join('\n')
+    }
+    if (sysText.trim()) parts.push(`[System Instructions]\n${sysText.trim()}\n`)
+  }
+
+  const msgs = parsed.messages || []
+  if (msgs.length === 1 && msgs[0].role === 'user' && !parsed.system) {
+    const c = msgs[0].content
+    if (typeof c === 'string') return c
+    if (Array.isArray(c)) return c.map((b) => (typeof b === 'string' ? b : b.text || '')).join('\n')
+  }
+
+  for (const m of msgs) {
+    const role = (m.role || 'user').toLowerCase()
+    let content = ''
+    if (typeof m.content === 'string') {
+      content = m.content
+    } else if (Array.isArray(m.content)) {
+      content = m.content.map((b) => (typeof b === 'string' ? b : b.text || '')).join('\n')
+    }
+    if (role === 'assistant') {
+      parts.push(`[Assistant]\n${content}\n`)
+    } else {
+      parts.push(`[User]\n${content}\n`)
+    }
+  }
+  return parts.join('\n').trim()
+}
+
+export async function handleAnthropicMessages({ req, res, parsed, cfg, say, fallback, findLs = findRunningLs, createConversation = newConversation }) {
+  const requestedModel = parsed.model || cfg.divert?.claude?.model || 'claude-sonnet-4-6'
+  const cleanModel = requestedModel.startsWith('claude-gemini-')
+    ? requestedModel.slice('claude-'.length)
+    : requestedModel
+  const mappedRoute = resolveModelRoute(cfg, cleanModel)
+  const route = mappedRoute || {
+    name: requestedModel,
+    googleModel: /pro|opus|high/i.test(cleanModel) ? 'gemini-3.1-pro' : 'gemini-3.8-flash',
+    isClaude: true,
+  }
+
+  const ls = await findLs()
+  if (!ls) {
+    say('ANTHROPIC-GOOGLE-LS-NOT-FOUND model=' + requestedModel)
+    return fallback()
+  }
+
+  const prompt = anthropicMessagesToPrompt(parsed)
+  const tier = resolveTier(route.googleModel)
+  const isStream = Boolean(parsed.stream)
+  say('ANTHROPIC-DISPATCH model=' + requestedModel + ' tier=' + tier + ' promptLen=' + prompt.length + ' stream=' + isStream)
+
+  let conv
+  try {
+    const proj = ensureWorkspaceProject(cfg)
+    conv = createConversation(cfg, prompt, {
+      httpPort: ls.httpPort,
+      csrf: ls.csrf,
+      model: tier,
+      projectId: proj?.projectId,
+    })
+  } catch (e) {
+    say('ANTHROPIC-NEW-CONV-ERR ' + e.message)
+    res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+    return res.end(JSON.stringify({ error: { type: 'api_error', message: 'Antigravity Language Server was found, but could not create a conversation: ' + e.message + '. Check Antigravity sign-in and state/logs/divert.log.' } }))
+  }
+
+  const convId = conv?.id
+  if (!convId) {
+    say('ANTHROPIC-NO-CONV-ID')
+    return fallback()
+  }
+
+  const dbFile = convDb(cfg, convId)
+  const msgId = 'msg_' + convId.replace(/-/g, '').slice(0, 24)
+
+  if (isStream) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    })
+
+    res.write('event: message_start\n')
+    res.write('data: ' + JSON.stringify({
+      type: 'message_start',
+      message: {
+        id: msgId,
+        type: 'message',
+        role: 'assistant',
+        model: requestedModel,
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+    }) + '\n\n')
+
+    res.write('event: content_block_start\n')
+    res.write('data: ' + JSON.stringify({
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'text', text: '' },
+    }) + '\n\n')
+
+    let sentLen = 0
+    let done = false
+    const startTime = Date.now()
+
+    while (!done && Date.now() - startTime < 120000) {
+      await new Promise((r) => setTimeout(r, 120))
+      try {
+        const rows = await readConversationSteps(dbFile)
+        for (const row of rows) {
+          if (row.step_payload) {
+            const fullText = extractCleanAssistantReply(Buffer.from(row.step_payload))
+            if (fullText) {
+              if (fullText.length > sentLen) {
+                const delta = fullText.slice(sentLen)
+                sentLen = fullText.length
+                res.write('event: content_block_delta\n')
+                res.write('data: ' + JSON.stringify({
+                  type: 'content_block_delta',
+                  index: 0,
+                  delta: { type: 'text_delta', text: delta },
+                }) + '\n\n')
+              }
+              if (row.status === 3) {
+                done = true
+              }
+              break
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    res.write('event: content_block_stop\n')
+    res.write('data: ' + JSON.stringify({ type: 'content_block_stop', index: 0 }) + '\n\n')
+
+    res.write('event: message_delta\n')
+    res.write('data: ' + JSON.stringify({
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: { output_tokens: sentLen },
+    }) + '\n\n')
+
+    res.write('event: message_stop\n')
+    res.write('data: ' + JSON.stringify({ type: 'message_stop' }) + '\n\n')
+    res.end()
+    say('ANTHROPIC-STREAM-DONE convId=' + convId + ' sentChars=' + sentLen)
+  } else {
+    let fullText = ''
+    const startTime = Date.now()
+    while (Date.now() - startTime < 120000) {
+      await new Promise((r) => setTimeout(r, 150))
+      try {
+        const rows = await readConversationSteps(dbFile)
+        for (const row of rows) {
+          if (row.step_payload) {
+            const txt = extractCleanAssistantReply(Buffer.from(row.step_payload))
+            if (txt) {
+              fullText = txt
+              if (row.status === 3) break
+            }
+          }
+        }
+        if (fullText && rows.some((r) => r.status === 3)) break
+      } catch (e) {}
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+    })
+    res.end(JSON.stringify({
+      id: msgId,
+      type: 'message',
+      role: 'assistant',
+      model: requestedModel,
+      content: [
+        {
+          type: 'text',
+          text: fullText,
+        },
+      ],
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: {
+        input_tokens: 0,
+        output_tokens: fullText.length,
+      },
+    }, null, 2))
+    say('ANTHROPIC-SYNC-DONE convId=' + convId + ' textChars=' + fullText.length)
+  }
+}
+
 export function createDivertServer(cfg, opts = {}) {
-  const key = opts.key || resolveKey(cfg, cfg.divert.keyRef)
-  if (!key) throw new Error('no API key: set ' + cfg.divert.keyRef + ' or add it to ~/.dsh/.credentials.yaml refs')
+  const needsKey = !cfg.divert?.passThrough && !cfg.divert?.sameModel
+  const key = opts.key || resolveKey(cfg, cfg.divert.keyRef) || (needsKey ? 'sk-antigravity-local-auth' : 'passthrough')
   const model = opts.model || cfg.divert.model
   const target = opts.target || cfg.divert.target
   const upstream = cfg.divert.upstream
@@ -312,11 +936,149 @@ export function createDivertServer(cfg, opts = {}) {
     req.on('end', () => {
       const body = Buffer.concat(chunks)
       req.url = stripPad(req.url)
+      if (req.method === 'GET' && req.url === '/healthz') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+        return res.end(JSON.stringify({ status: 'ok', service: 'antigravity-armor-divert' }))
+      }
       // 令牌体检（v1.7.6）：401 的两种成因（令牌过期 vs 令牌新鲜但被拒）长得一样，
       // 只报形态与有效期就能当场分开。永不打印令牌本身。
       if (cfg.divert.authDiag !== false) {
         try { say(tokenLine(describeToken(req.headers.authorization))) } catch {}
       }
+
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': '*',
+        })
+        return res.end()
+      }
+
+      const isCompatibilityApi = req.url.includes('/messages') ||
+        req.url.includes('chat/completions') ||
+        /(?:^|\/)models(?:\?|$)/.test(req.url)
+      if (isCompatibilityApi && opts.localApiKey) {
+        const authorization = req.headers.authorization || ''
+        const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1]
+        const suppliedKey = req.headers['x-api-key'] || req.headers['api-key'] || bearer || ''
+        let authorized
+        try {
+          authorized = isValidApiKey(cfg, suppliedKey, opts.localApiKey)
+        } catch (error) {
+          say('LOCAL-API-KEY-STORE-ERR ' + error.message)
+          res.writeHead(500, {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+          })
+          return res.end(JSON.stringify({ error: { type: 'api_error', message: 'Local API key registry is unavailable.' } }))
+        }
+        if (!authorized) {
+          res.writeHead(401, {
+            'Content-Type': 'application/json',
+            'WWW-Authenticate': 'Bearer',
+            'Access-Control-Allow-Origin': '*',
+          })
+          return res.end(JSON.stringify({ error: { type: 'authentication_error', message: 'A valid local API key is required.' } }))
+        }
+      }
+
+      // 0. Anthropic 原生 Messages API 兼容（供 CC Switch / Claude Desktop / Claude Code 直连）
+      if (req.url.includes('/messages') || req.url.endsWith('/messages')) {
+        let parsed
+        try { parsed = JSON.parse(body.toString('utf8')) } catch (e) {
+          say('ANTHROPIC-PARSE-ERR ' + e.message)
+          res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+          return res.end(JSON.stringify({ error: { type: 'invalid_request_error', message: 'Invalid JSON body: ' + e.message } }))
+        }
+        handleAnthropicMessages({
+          req,
+          res,
+          parsed,
+          cfg,
+          say,
+          findLs: opts.findRunningLs || findRunningLs,
+          createConversation: opts.newConversation || newConversation,
+          fallback: () => {
+            res.writeHead(503, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+            res.end(JSON.stringify({ error: { type: 'api_error', message: 'Antigravity language server unavailable. Start Antigravity and retry.' } }))
+          },
+        })
+        return
+      }
+
+      // 1. OpenAI 兼容对话补全（供 Claude Code / DeepSeek Harness / OpenAI SDK 直连）
+      if (req.url.includes('chat/completions')) {
+        let parsed
+        try { parsed = JSON.parse(body.toString('utf8')) } catch (e) {
+          say('OAI-PARSE-ERR ' + e.message)
+          res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+          return res.end(JSON.stringify({ error: { message: 'Invalid JSON body: ' + e.message } }))
+        }
+        const requestedModel = parsed.model || model || 'gemini-3.8-flash'
+        const isStream = Boolean(parsed.stream)
+        say('OPENAI-CHAT ' + req.method + ' ' + req.url + ' model=' + requestedModel + ' stream=' + isStream)
+
+        // 优先检查是否命中映射模型或 Claude 路由
+        const route = resolveModelRoute(cfg, requestedModel)
+        const localClaudeFallback = () => {
+          res.writeHead(503, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+          res.end(JSON.stringify({ error: { message: 'Antigravity language server unavailable. Start Antigravity and retry.' } }))
+        }
+        handleLocalChatCompletion({
+          req,
+          res,
+          parsed,
+          cfg,
+          requestedModel,
+          modelForTier: route?.isClaude ? route.googleModel : requestedModel,
+          isStream,
+          say,
+          findLs: opts.findRunningLs || findRunningLs,
+          createConversation: opts.newConversation || newConversation,
+          fallback: () => {
+            if (route?.isClaude) return localClaudeFallback()
+            forwardToTarget({ req, res, parsed, target, key, say })
+          },
+        })
+        return
+      }
+
+      // 2. 按 API 协议分别提供 Claude 伪装模型或原始 Google 模型列表
+      if (req.url.endsWith('/models') || req.url === '/v1/models' || req.url === '/models' || req.url.includes('/models')) {
+        say('OPENAI-MODELS ' + req.method + ' ' + req.url)
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        })
+        const isAnthropicApi = Boolean(
+          req.headers['anthropic-version'] || req.headers['x-api-key'] || req.headers['api-key']
+        )
+        const data = isAnthropicApi
+          ? CLAUDE_LEVEL_MODELS.map(({ id, root }) => ({
+            id,
+            object: 'model',
+            created: 1700000000,
+            owned_by: 'anthropic',
+            permission: [],
+            root: cfg.divert?.modelMapping?.[id]?.googleModel || root,
+            parent: null,
+          }))
+          : AUTHENTIC_MODELS.map((id) => ({
+            id,
+            object: 'model',
+            created: 1700000000,
+            owned_by: 'google',
+            permission: [],
+            root: id,
+            parent: null,
+          }))
+        return res.end(JSON.stringify({
+          object: 'list',
+          data,
+        }, null, 2))
+      }
+
       if (req.url.includes('GenerateContent')) {
         // 同模型重试（v1.6.0）：原始模型重采样，装甲进 systemInstruction，仍然零换模型。
         if (cfg.divert.sameModel) {
@@ -345,9 +1107,19 @@ export function createDivertServer(cfg, opts = {}) {
         return attempt(oai, res, 0, parsed, built.prefill, lang)
       }
       const u = new URL(upstream)
+      const relayTransport = u.protocol === 'http:' ? http : https
       const headers = { ...req.headers }
-      delete headers.host; delete headers['content-length']
-      const preq = https.request({ host: u.hostname, port: 443, method: req.method, path: req.url, headers: { ...headers, host: u.hostname, 'content-length': body.length } }, (pres) => {
+      delete headers.host
+      delete headers['content-length']
+      delete headers['transfer-encoding']
+      delete headers.connection
+      const preq = relayTransport.request({
+        host: u.hostname,
+        port: Number(u.port || (u.protocol === 'http:' ? 80 : 443)),
+        method: req.method,
+        path: req.url,
+        headers: { ...headers, host: u.host, 'content-length': body.length },
+      }, (pres) => {
         // v1.7.6：这条回退分支是**账号接口**（loadCodeAssist / ListExperiments / onboardUser …）的必经之路，
         // 以前转发完一个字都不记 —— 于是「账号一直在 401」在 divert 日志里完全隐形（实测 09:03–11:29 全空），
         // 只能靠 IDE 自己的日志才发现。与「divert 全绿但代理已死」属于同一类盲点，必须记。
@@ -363,8 +1135,25 @@ export function createDivertServer(cfg, opts = {}) {
           }
         } else if (code === 429) say('PASS-QUOTA 429 上游额度用尽 —— 账号侧配额，不是链路问题。')
         res.writeHead(code, pres.headers); pres.pipe(res)
+        pres.on('aborted', () => {
+          say('PASS-ABORTED upstream response ended early')
+          if (!res.headersSent) res.writeHead(502)
+          if (!res.destroyed && !res.writableEnded) res.destroy()
+        })
+        pres.on('error', (e) => {
+          say('PASS-RESPONSE-ERR ' + e.message)
+          if (!res.headersSent) res.writeHead(502)
+          if (!res.destroyed && !res.writableEnded) res.destroy(e)
+        })
       })
-      preq.on('error', (e) => { say('PASS-ERR ' + e.message); if (!res.headersSent) res.writeHead(502); res.end('{}') })
+      preq.on('error', (e) => {
+        say('PASS-ERR ' + e.message)
+        if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'Upstream relay failed: ' + e.message } }))
+      })
+      res.once('close', () => {
+        if (!res.writableEnded) preq.destroy()
+      })
       preq.end(body)
     })
   })

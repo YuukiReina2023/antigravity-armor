@@ -14,7 +14,9 @@
     "install": "node src/cli.mjs install --dry-run",
     "divert": "node src/cli.mjs divert start",
     "eval": "node src/cli.mjs eval report",
-    "probe": "node src/cli.mjs probe measure"
+    "probe": "node src/cli.mjs probe measure",
+    "agy": "node src/cli.mjs agy status",
+    "ui": "dotnet run --project ui/AntigravityArmor.UI"
   },
   "engines": {
     "node": ">=20"

@@ -1,0 +1,28 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="AntigravityArmor.UI.App"
+             RequestedThemeVariant="Light">
+
+    <Application.Styles>
+        <FluentTheme />
+    </Application.Styles>
+
+    <TrayIcon.Icons>
+        <TrayIcons>
+            <TrayIcon Icon="/Assets/app-icon.ico" ToolTipText="Antigravity Armor // 破甲工程控制中枢" Clicked="OnTrayIconClicked">
+                <TrayIcon.Menu>
+                    <NativeMenu>
+                        <NativeMenuItem Header="🛡️ 打开控制中枢" Click="OnShowMainWindowClicked" />
+                        <NativeMenuItemSeparator />
+                        <NativeMenuItem Header="🚀 启动改道代理 (50100)" Click="OnStartDivertClicked" />
+                        <NativeMenuItem Header="⏹ 停止代理服务" Click="OnStopDivertClicked" />
+                        <NativeMenuItem Header="⚙️ 一键应用装甲" Click="OnInstallArmorClicked" />
+                        <NativeMenuItem Header="🔄 刷新运行态势" Click="OnRefreshStatusClicked" />
+                        <NativeMenuItemSeparator />
+                        <NativeMenuItem Header="❌ 彻底退出系统" Click="OnExitAppClicked" />
+                    </NativeMenu>
+                </TrayIcon.Menu>
+            </TrayIcon>
+        </TrayIcons>
+    </TrayIcon.Icons>
+</Application>

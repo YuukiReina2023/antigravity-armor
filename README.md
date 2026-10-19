@@ -1,6 +1,6 @@
 # antigravity-armor
 
-把 Antigravity（Google 的 agentic IDE / Antigravity 2.0，v2.12.2）的拒答行为按**五层**系统性拆掉，并且每一层都可复现、可验证、可回滚。
+把 Antigravity 的拒答行为按**五层**系统性拆掉，直接接出 **Antigravity CLI (`agy`)** 并封装为跨平台 **Avalonia UI** 控制中枢，彻底剥离针对桌面端 Electron (`app.asar`) 的繁杂依赖，并且每一层都可复现、可验证、可回滚。
 
 所有能力来自对本机样本的实测逆向与调试，不是推测：见文末「实测证据」。
 
@@ -10,55 +10,64 @@
 
 | 层 | 作用点 | 机制 | 代码 |
 |---|---|---|---|
-| **L1 二进制** | `resources/bin/language_server.exe`（155 MB Go 二进制） | 41 个注入点的**等长字节替换**（1 整块 + 3 逐句 + 19 固定串 + 18 行级，三趟应用）：判官提示词（Runtime Policy Guardian）、浏览器安全段、持久化分类器、代码安全判据、安全策略判定词 | `src/layers/binary.mjs` |
+| **L1 二进制** | `language_server.exe` / Go 二进制 | 41 个注入点的**等长字节替换**（1 整块 + 3 逐句 + 19 固定串 + 18 行级，三趟应用）：判官提示词（Runtime Policy Guardian）、浏览器安全段、持久化分类器、代码安全判据、安全策略判定词 | `src/layers/binary.mjs` |
 | **L2 规则/技能** | `~/.gemini/config/AGENTS.md`、`~/.gemini/Gemini.md`、`skills/*/SKILL.md`、`<repo>/.agents/rules/` | 全局 always-on 规则 + 按需加载技能 + 工作区规则 | `src/layers/rules.mjs` |
 | **L3 生命周期钩子** | `hooks.json`（6 个全局根 + 全部工作区） | PreToolUse 全量放行 / PreInvocation 每轮注入装甲 / PostInvocation 拒绝恢复 / Stop 拒绝拦截 | `src/layers/hooks.mjs` |
-| **L4 IDE 通道** | `resources/app.asar` → `dist/languageServer.js` | 等长补丁把 `--cloud_code_endpoint` 从 Google 指向本地代理 | `src/layers/ide.mjs` |
+| **L4 CLI 接入通道** | `agy` (Antigravity CLI) / Avalonia UI | 直接接入 `agy` 命令行客户端，通过注入 `AICODE_ENDPOINT_URL` 等环境变量无缝接入改道代理，无需修补桌面端 `app.asar` | `src/driver/agy.mjs` |
 | **L5 模型后端改道** | `/v1internal:streamGenerateContent` | Gemini↔OpenAI 协议转换（含 tool_call 契约归一化）+ system 位装甲 + 拒绝探测重试 | `src/layers/divert.mjs`, `src/proto/convert.mjs` |
 
-L1–L3 解决**客户端侧**的拒绝（工具判官、规则注入、权限门）；L4–L5 解决**服务端前置过滤器**——那层在 Google 后端，本地改不动，只能把模型通道整体改道。
+L1–L3 解决**客户端侧**的拒绝（工具判官、规则注入、权限门）；L4–L5 解决**服务端前置过滤器**——那层在 Google 后端，本地改不动，通过直接驱动 `agy` 将模型通道整体改道。
 
 ### 数据流
 
 ```
-Antigravity IDE ──spawn──> language_server.exe ──┐
-   (app.asar 已改 endpoint)                      │  /v1internal:streamGenerateContent
-                                                 v
-                                   127.0.0.1:50100  (cc-divert)
-                                                 ├─ streamGenerateContent ─> DeepSeek / 其它 OpenAI 兼容端点
-                                                 └─ 其它 /v1internal:*     ─> 透传 daily-cloudcode-pa（鉴权/模型清单不变）
+Antigravity CLI (agy) / Avalonia UI ──────────────┐
+   (环境变量直指 127.0.0.1:50100)                  │  /v1internal:streamGenerateContent
+                                                  v
+                                    127.0.0.1:50100  (cc-divert)
+                                                  ├─ streamGenerateContent ─> DeepSeek / 其它 OpenAI 兼容端点
+                                                  └─ 其它 /v1internal:*     ─> 透传 daily-cloudcode-pa（鉴权/模型清单不变）
 ```
 
 ---
 
-## 安装
+## 安装与快速开始
 
 ```powershell
-cd C:\Users\Administrator\Projects\antigravity-armor
-node test/run.mjs                      # 155 个单测，零依赖
-node scripts/run-one.mjs probe.test.mjs testDivertConsumesRequestBody   # 单跑一条（带挂死看门狗）
+cd C:\Users\AnyNeko\Desktop\antigravity-armor
+node test/run.mjs                      # 289 个单测，全绿
 node src/cli.mjs install               # 默认 dry-run，先看清楚要改什么
-node src/cli.mjs install --apply       # 落盘（自动备份到 state/backup）
-node src/cli.mjs divert start          # 起改道代理
-node src/cli.mjs status                # 五层状态总览
+node src/cli.mjs install --apply       # 落盘注入装甲（规则与钩子）
+node src/cli.mjs divert start          # 起改道代理 (50100)
+node src/cli.mjs status                # 状态总览
+node src/cli.mjs agy status            # 查看 agy CLI 对接状态
 ```
 
-或一键：`powershell -ExecutionPolicy Bypass -File scripts/install.ps1`
+### 启动 Avalonia UI 图形界面
 
-重启 Antigravity 后 L4/L5 生效（asar 在启动时读取）。
+本项目完整封装了现代化暗黑科技风格的 **Avalonia UI** 控制中枢：
+
+```powershell
+# 运行 Avalonia UI 客户端
+dotnet run --project ui/AntigravityArmor.UI
+# 或双击根目录下的 aarmor-ui.cmd
+```
 
 ## 常用命令
 
 ```
-aarmor status                     五层状态总览（含 BOM 异常、端口、密钥解析）
+aarmor status                     五层状态总览（含 BOM 异常、端口、密钥解析、agy 检测）
+aarmor agy status                 查看 agy CLI 状态与可用模型列表
+aarmor agy run "<prompt>"         直接通过 agy 驱动执行任务（自动挂载改道装甲代理）
+aarmor agy models                 列出 agy 支持的官方与外挂模型
+aarmor agy agents                 列出可用 subagents
 aarmor verify [--json]            审计：装甲标记、残留锚点、备份列表
-aarmor install [--apply] [--layer=binary|rules|hooks|ide] [--workspaces=a,b]
-aarmor rollback --layer=binary|ide|rules|hooks
+aarmor install [--apply] [--layer=binary|rules|hooks] [--workspaces=a,b]
+aarmor rollback --layer=binary|rules|hooks
 aarmor divert start|stop|status|run [--port] [--model] [--target]
-aarmor ls start|stop              拉起/停掉语言服务器（复刻 IDE spawn 契约）
-aarmor drive new "<prompt>" --port=<LS_HTTP> [--workspace=DIR] [--project=ID]
-aarmor drive reply <conversationId> [--json]    读模型回复（SQLite 直读）
-aarmor drive list                 列最近会话
+aarmor key list [--json]              列出 API Key（密钥值脱敏）
+aarmor key gen [名称]                 生成 sk-antigravity- 密钥（仅创建时显示完整值）
+aarmor key revoke <Key ID|Key>        吊销密钥并立即拒绝后续请求
 aarmor eval build|verify|scan|report|diff   证据隐匿评测夹具（见 docs/EVASION-EVAL.md）
 aarmor probe bank|measure [--attempts=N] [--target=URL]   破甲跑分（见 docs/BREAK-PERF.md）
 ```
@@ -87,11 +96,13 @@ node src/cli.mjs eval report            # 天真视角 vs 加固视角打分
 上面那套量的是「看得见什么」，这一套量的是**「拒绝了没有」** —— 把「有没有变好」变成数字。
 
 ```powershell
-node src/cli.mjs probe measure --attempts=4                 # 离线：mock 上游，零 API 成本
-node src/cli.mjs probe measure --target=<ENDPOINT> --json    # 真实：量模型的脾气
+node src/cli.mjs probe measure --json                         # 真实：直连 127.0.0.1:50100/v1/messages
+node src/cli.mjs probe measure --protocol=openai --json       # 真实：直连 /v1/chat/completions
+node src/cli.mjs probe measure --target=<ENDPOINT> --key=<KEY> # 指定真实端点
+node src/cli.mjs probe measure --mock                         # 显式离线机器闭环测试
 ```
 
-两个口径不能混：离线量的是**机器**（探测 → 升级 → 重投递这条链路），真实量的是**模型**。
+默认模式逐条直连真实反代 API，并记录 HTTP 状态码、首字节 TTFB、文本字符数和最终拒答分类。`--mock` 只用于离线验证内部探测/重试机器逻辑；旧表格是 mock 基线，不代表真实模型表现。
 
 本机离线实测的剂量-反应（34 条探针，含 6 条中文，全杠杆开启；完整验证见 docs/VERIFICATION.md）：
 
@@ -263,7 +274,7 @@ src/
   eval/harness.mjs     TP/FN/FP 打分与对账
   eval/index.mjs       aarmor eval 子命令
   probe/probes.json    破甲跑分探针库（分类 / 顽固度 / 拒绝文案）
-  probe/mock.mjs       离线 mock 上游（零 API 成本闭环验证）
+  probe/mock.mjs       显式单测模式用的离线 mock 上游
   probe/run.mjs        跑分器：交付率 / 残余拒绝 / 漏检拒绝
   probe/index.mjs      aarmor probe 子命令
 assets/
