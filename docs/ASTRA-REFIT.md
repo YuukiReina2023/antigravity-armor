@@ -10,12 +10,12 @@ github.com/3641397194-wq/gpt6-Astra）。它的路线与我们此前的 L5 diver
 
 | Astra 概念 | 本项目落点 | 状态 |
 |---|---|---|
-| 席位（six seats） | `src/seats/packs.mjs` SEATS：gemini / glm / deepseek（可扩） | ✅ 本轮 |
-| 词包模板 + 渲染（markers + {{占位符}}） | `packTemplate` / `renderPack`，`<!-- ARMOR-SEAT-POJIA:BEGIN/END -->` | ✅ 本轮 |
-| 启动口令（冷咖啡，精确命中） | `src/seats/gate.mjs` ActivationGate（30min TTL / 100 会话上限） | ✅ 本轮 |
-| 事务式部署（备份/SHA-256/恢复/差异预览） | `src/seats/deploy.mjs` preview/deploy/verify/restore | ✅ 本轮 |
-| 工作台 UI | 暂用 CLI：`aarmor seats list/preview/deploy/verify/restore` | ✅ 本轮 |
-| 换模型改道（L5 divert → DeepSeek/GLM） | **废弃为主路**：`divert.passThrough: true` 时 divert 哑化为原模型直通 | ✅ 本轮 |
+| 席位（six seats） | `src/seats/packs.mjs` SEATS：gemini / glm / deepseek（可扩） | 本轮完成 |
+| 词包模板 + 渲染（markers + {{占位符}}） | `packTemplate` / `renderPack`，`<!-- ARMOR-SEAT-POJIA:BEGIN/END -->` | 本轮完成 |
+| 启动口令（冷咖啡，精确命中） | `src/seats/gate.mjs` ActivationGate（30min TTL / 100 会话上限） | 本轮完成 |
+| 事务式部署（备份/SHA-256/恢复/差异预览） | `src/seats/deploy.mjs` preview/deploy/verify/restore | 本轮完成 |
+| 工作台 UI | 暂用 CLI：`aarmor seats list/preview/deploy/verify/restore` | 本轮完成 |
+| 换模型改道（L5 divert → DeepSeek/GLM） | **废弃为主路**：`divert.passThrough: true` 时 divert 哑化为原模型直通 | 本轮完成 |
 
 ## divert 的新角色
 

@@ -37,8 +37,12 @@ public class MainWindowViewModel : ViewModelBase
 
     // 跑分与评测
     private string _probeOutput = "默认直连本机 50100 反代 API；请先启动代理并确认授权密钥有效。";
-    private string _selectedProbeModel = "claude-haiku-5-5";
+    private string _selectedProbeModel = "gemini-3.8-flash";
     private bool _isProbeRunning = false;
+    private string _modelMappingStatus = "正在读取模型映射...";
+    private string _selectedGoogleModel = string.Empty;
+    private ModelMappingItem? _selectedModelMapping;
+    private bool _isModelMappingBusy;
     private string _evalOutput = "点击【运行隐匿评测】可对 6 类证据隐匿手法（零宽、ADS、同形字等）进行加固视角检测比对。";
     private bool _isEvalRunning = false;
 
@@ -69,11 +73,18 @@ public class MainWindowViewModel : ViewModelBase
 
     public ObservableCollection<string> AvailableProbeModels { get; } = new()
     {
-        "claude-haiku-5-5",
-        "claude-sonnet-5-5",
-        "claude-opus-5-5",
-        "claude-fable-5-1",
-        "claude-mythos-5-1"
+        "gemini-3.8-flash",
+        "gemini-3.8-flash-high",
+        "gemini-3.1-pro",
+        "gemini-3.1-pro-high"
+    };
+
+    public ObservableCollection<string> AvailableGoogleModels { get; } = new()
+    {
+        "gemini-3.8-flash",
+        "gemini-3.8-flash-high",
+        "gemini-3.1-pro",
+        "gemini-3.1-pro-high"
     };
 
     public ObservableCollection<string> AvailableModes { get; } = new()
@@ -111,6 +122,22 @@ public class MainWindowViewModel : ViewModelBase
     public string ProbeOutput { get => _probeOutput; set => SetProperty(ref _probeOutput, value); }
     public string SelectedProbeModel { get => _selectedProbeModel; set => SetProperty(ref _selectedProbeModel, value); }
     public bool IsProbeRunning { get => _isProbeRunning; set => SetProperty(ref _isProbeRunning, value); }
+    public string ModelMappingStatus { get => _modelMappingStatus; set => SetProperty(ref _modelMappingStatus, value); }
+    public string SelectedGoogleModel { get => _selectedGoogleModel; set => SetProperty(ref _selectedGoogleModel, value); }
+    public ModelMappingItem? SelectedModelMapping
+    {
+        get => _selectedModelMapping;
+        set
+        {
+            if (SetProperty(ref _selectedModelMapping, value) && value != null)
+            {
+                SelectedGoogleModel = value.GoogleModel;
+                (SaveModelMappingCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            }
+        }
+    }
+    public bool IsModelMappingBusy { get => _isModelMappingBusy; set => SetProperty(ref _isModelMappingBusy, value); }
+    public ObservableCollection<ModelMappingItem> ModelMappings { get; } = new();
     public string EvalOutput { get => _evalOutput; set => SetProperty(ref _evalOutput, value); }
     public bool IsEvalRunning { get => _isEvalRunning; set => SetProperty(ref _isEvalRunning, value); }
 
@@ -153,6 +180,8 @@ public class MainWindowViewModel : ViewModelBase
     public ICommand CancelAgyPromptCommand { get; }
     public ICommand ClearAgyOutputCommand { get; }
     public ICommand RunProbeCommand { get; }
+    public ICommand RefreshModelMappingsCommand { get; }
+    public ICommand SaveModelMappingCommand { get; }
     public ICommand RunEvalReportCommand { get; }
     public ICommand BuildEvalFixtureCommand { get; }
     public ICommand VerifySeatsCommand { get; }
@@ -174,6 +203,8 @@ public class MainWindowViewModel : ViewModelBase
         CancelAgyPromptCommand = new RelayCommand(CancelAgyPrompt, () => IsAgyBusy);
         ClearAgyOutputCommand = new RelayCommand(() => AgyOutput = string.Empty);
         RunProbeCommand = new RelayCommand(async () => await RunProbeAsync(), () => !IsProbeRunning);
+        RefreshModelMappingsCommand = new RelayCommand(async () => await RefreshModelMappingsAsync(), () => !IsModelMappingBusy);
+        SaveModelMappingCommand = new RelayCommand(async () => await SaveModelMappingAsync(), () => !IsModelMappingBusy && SelectedModelMapping != null);
         RunEvalReportCommand = new RelayCommand(async () => await RunEvalReportAsync(), () => !IsEvalRunning);
         BuildEvalFixtureCommand = new RelayCommand(async () => await BuildEvalFixtureAsync(), () => !IsEvalRunning);
         VerifySeatsCommand = new RelayCommand(async () => await VerifySeatsAsync());
@@ -187,6 +218,7 @@ public class MainWindowViewModel : ViewModelBase
         _ = RefreshStatusAsync();
         _ = RefreshApiKeysAsync();
         _ = RefreshConversationHistoryAsync();
+        _ = RefreshModelMappingsAsync();
     }
 
     public async Task RefreshStatusAsync()
@@ -312,13 +344,74 @@ public class MainWindowViewModel : ViewModelBase
         (RunProbeCommand as RelayCommand)?.RaiseCanExecuteChanged();
         ProbeOutput = $"正在使用模型 {SelectedProbeModel} 直连 50100 反代 API 逐条发送真实探针，并统计 HTTP 状态、TTFB、交付字符数与最终拒答...\n";
 
-        await _cliService.RunNodeCliAsync($"probe measure --model={QuoteArgument(SelectedProbeModel)}", line =>
+        await _cliService.RunNodeCliAsync($"probe measure --protocol=openai --model={QuoteArgument(SelectedProbeModel)}", line =>
         {
             ProbeOutput += line + "\n";
         });
 
         IsProbeRunning = false;
         (RunProbeCommand as RelayCommand)?.RaiseCanExecuteChanged();
+    }
+
+    public async Task RefreshModelMappingsAsync()
+    {
+        IsModelMappingBusy = true;
+        (RefreshModelMappingsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (SaveModelMappingCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        try
+        {
+            var result = await _cliService.RunNodeCliAsync("modelmap list --json");
+            if (!result.Success) throw new InvalidOperationException(result.Error);
+            var items = JsonSerializer.Deserialize<ModelMappingItem[]>(result.Output, JsonOptions)
+                ?? Array.Empty<ModelMappingItem>();
+            var selectedAlias = SelectedModelMapping?.ClaudeModel;
+            ModelMappings.Clear();
+            foreach (var item in items) ModelMappings.Add(item);
+            SelectedModelMapping = ModelMappings.FirstOrDefault(item => item.ClaudeModel == selectedAlias)
+                ?? ModelMappings.FirstOrDefault();
+            ModelMappingStatus = $"已加载 {ModelMappings.Count} 档映射";
+        }
+        catch (Exception ex)
+        {
+            ModelMappingStatus = "映射读取失败: " + ex.Message;
+        }
+        finally
+        {
+            IsModelMappingBusy = false;
+            (RefreshModelMappingsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (SaveModelMappingCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        }
+    }
+
+    public async Task SaveModelMappingAsync()
+    {
+        if (SelectedModelMapping == null) return;
+        IsModelMappingBusy = true;
+        (SaveModelMappingCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (RefreshModelMappingsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        var mappingSaved = false;
+        try
+        {
+            var args = $"modelmap set --alias={QuoteArgument(SelectedModelMapping.ClaudeModel)} --google-model={QuoteArgument(SelectedGoogleModel)}";
+            var result = await _cliService.RunNodeCliAsync(args);
+            if (!result.Success) throw new InvalidOperationException(result.Error);
+            mappingSaved = true;
+            var restart = await _cliService.RunNodeCliAsync("divert restart");
+            if (!restart.Success)
+                throw new InvalidOperationException("映射已保存，但代理重启失败: " + restart.Error);
+            SelectedModelMapping.GoogleModel = SelectedGoogleModel;
+            ModelMappingStatus = $"{SelectedModelMapping.ClaudeModel} → {SelectedGoogleModel} 已保存，50100 代理已重启。";
+        }
+        catch (Exception ex)
+        {
+            ModelMappingStatus = (mappingSaved ? "映射已保存，但应用失败: " : "映射保存失败: ") + ex.Message;
+        }
+        finally
+        {
+            IsModelMappingBusy = false;
+            (SaveModelMappingCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            (RefreshModelMappingsCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        }
     }
 
     public async Task RunEvalReportAsync()

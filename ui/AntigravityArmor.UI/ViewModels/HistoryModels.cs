@@ -30,3 +30,11 @@ public class ConversationMessage
     public string Role { get; set; } = string.Empty;
     public string Text { get; set; } = string.Empty;
 }
+
+public class ModelMappingItem
+{
+    public string ClaudeModel { get; set; } = string.Empty;
+    public string Family { get; set; } = string.Empty;
+    public string Level { get; set; } = string.Empty;
+    public string GoogleModel { get; set; } = string.Empty;
+}

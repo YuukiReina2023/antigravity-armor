@@ -103,7 +103,7 @@ export function assessRouting({ groups = [], connections = [], exitCountry = nul
   const primary = groups.find((g) => g.type === 'Selector' && g.now && byName.get(g.now) && AUTO_TYPES.includes(byName.get(g.now).type))
   if (primary) {
     autoGroup = byName.get(primary.now)
-    warns.push('⚠ 主组「' + primary.name + '」挂在**自动测速组**「' + autoGroup.name + '」上 → 你在界面上手选的节点**不生效**，走哪个国家由自动测速决定（实测当前选中 ' + autoGroup.now + '）。')
+    warns.push('WARN 主组「' + primary.name + '」挂在**自动测速组**「' + autoGroup.name + '」上 → 你在界面上手选的节点**不生效**，走哪个国家由自动测速决定（实测当前选中 ' + autoGroup.now + '）。')
     warns.push('  修法：点「' + primary.name + '」组，选**具体节点**（不要选 ' + autoGroup.name + '）。')
   }
   // 2) 目标流量的实际链路
@@ -113,7 +113,7 @@ export function assessRouting({ groups = [], connections = [], exitCountry = nul
   const nodeName = (chain && chain[0]) || (autoGroup && autoGroup.now) || null
   const claimed = extractRegion(nodeName)
   if (claimed && exitCountry && claimed !== exitCountry) {
-    warns.push('⚠ 节点「' + nodeName + '」标称 ' + claimed + '，但**实测出口国家是 ' + exitCountry + '** —— 中转/专线节点的入口与落地不是同一台机器，别信标签。')
+    warns.push('WARN 节点「' + nodeName + '」标称 ' + claimed + '，但**实测出口国家是 ' + exitCountry + '** —— 中转/专线节点的入口与落地不是同一台机器，别信标签。')
   }
   return { autoGroup: autoGroup ? autoGroup.name : null, autoNode: autoGroup ? autoGroup.now : null, chain, nodeName, claimed, warns }
 }

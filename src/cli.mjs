@@ -19,6 +19,7 @@ import { probeLanguageServers } from './diag/ls.mjs'
 import { locateAgy, getAgyStatus, runPrompt as runAgyPrompt, listModels as listAgyModels, listAgents as listAgyAgents } from './driver/agy.mjs'
 import { netcheck } from './diag/net.mjs'
 import { readClash, assessRouting } from './diag/clash.mjs'
+import { listClaudeModelMappings, setClaudeModelMapping } from './model-mapping.mjs'
 
 const argv = process.argv.slice(2)
 const cmd = argv[0]
@@ -89,7 +90,7 @@ async function status() {
   const lsCell = lsProbe.count ? lsProbe.summary : lsState
   rows.push(['ls', lsCell, lsProbe.count ? 'language_server.exe（真实进程）' : join(cfg.logDir, 'language_server.log')])
   if (idePatched && lsProbe.count && lsProbe.viaDivert === 0) {
-    rows.push(['⚠ ls↔divert', '未发现指向 divert 的 LS', 'L4 补丁可能已被 IDE 更新覆盖，跑 install --layer=ide']) 
+    rows.push(['WARN ls-divert', '未发现指向 divert 的 LS', 'L4 补丁可能已被 IDE 更新覆盖，跑 install --layer=ide'])
   }
   // 上游健康判读（v1.7.5）：401/429/503 三类故障在 status 里直接说清楚，
   // 免得「Agent terminated due to error」被误当成装甲失效。
@@ -110,12 +111,12 @@ async function status() {
   // 致命组合必须喊出来：IDE 已被指向本地代理，而代理不在 —— 连账号都登录不上
   // （实测报错：dial tcp 127.0.0.1:50100: connectex: No connection could be made）
   if (idePatched && !divertUp) {
-    console.log('\n⚠ IDE 已指向 127.0.0.1:' + cfg.divert.port + '，但代理不在监听 —— 此刻连账号登录都会失败。')
+    console.log('\nWARN IDE 已指向 127.0.0.1:' + cfg.divert.port + '，但代理不在监听 —— 此刻连账号登录都会失败。')
     console.log('  立刻恢复：node src/cli.mjs divert start')
     console.log('  永久保活：node src/cli.mjs divert autostart install')
   }
   if (upWarn) {
-    const mark = upWarn.verdict === 'auth' ? '⚠ 账号态' : upWarn.verdict === 'quota' ? '⚠ 配额' : '⚠ 上游'
+    const mark = upWarn.verdict === 'auth' ? 'WARN 账号态' : upWarn.verdict === 'quota' ? 'WARN 配额' : 'WARN 上游'
     console.log('\n' + mark + ' ' + upWarn.line)
     console.log('  ' + upWarn.hint)
     if (upWarn.verdict === 'auth') console.log('  判据：路径/剥离字节数与成功那次完全一致，唯一变量是令牌 —— 不是破甲问题。')
@@ -174,6 +175,7 @@ function divert(action) {
       const ms = [...readText(lp).matchAll(/model=([\w.-]+)/g)]
       lastModel = ms.length ? ms[ms.length - 1][1] : null
     }
+
     const sm = !!cfg.divert.sameModel
     const pt = !!cfg.divert.passThrough
     console.log('divert :' + port + ' -> ' + (running ? 'LISTENING' : 'down') + '  ' + (sm ? 'same-model 同模型重试 upstream=' + cfg.divert.upstream : pt ? 'pass-through 原模型直通 upstream=' + cfg.divert.upstream : 'target=' + cfg.divert.target))
@@ -196,10 +198,36 @@ function divert(action) {
     spawnDivert(port)
     return
   }
+  if (action === 'restart') return restartDivert(port)
   if (action === 'ensure') return ensureDivert(port)
   if (action === 'watchdog') return runWatchdog(port)
   if (action === 'autostart') return divertAutostart(positional[1] || 'status')
   if (action === 'run') return runDivert(port)
+}
+
+function modelmap(action) {
+  if (!action || action === 'list') {
+    const mappings = listClaudeModelMappings(cfg)
+    if (flags.json) console.log(JSON.stringify(mappings, null, 2))
+    else {
+      for (const item of mappings) {
+        console.log(item.level + ' ' + item.claudeModel + ' -> ' + item.googleModel)
+      }
+    }
+    return
+  }
+  if (action === 'set') {
+    const claudeModel = flags.alias || positional[1]
+    const googleModel = flags['google-model'] || positional[2]
+    if (!claudeModel || !googleModel) {
+      throw new Error('用法: aarmor modelmap set --alias=<Claude model> --google-model=<Gemini model>')
+    }
+    const mapping = setClaudeModelMapping(cfg, String(claudeModel), String(googleModel))
+    console.log(JSON.stringify(mapping))
+    console.log('配置已保存；重启 divert 后生效。')
+    return
+  }
+  throw new Error('未知 modelmap 子命令 ' + action + '（list/set）')
 }
 
 /** 出口网络体检（v1.7.7）：回答两个不同的问题
@@ -221,7 +249,7 @@ async function netcheckCmd() {
   console.log('\n  归属: ' + [g.country, g.city, g.isp].filter(Boolean).join(' / '))
   console.log('  ASN : ' + (g.as || '-') + (g.hosting ? '   [hosting/datacenter]' : ''))
   const a = r.assessment
-  console.log('\n判读: ' + (a.ok ? '✅ ' : '⚠ ') + a.verdict)
+  console.log('\n判读: ' + (a.ok ? '正常 ' : 'WARN ') + a.verdict)
   for (const h of a.hints) console.log('  ' + h)
 
   // 路由实况：谁在真正承载流量？（"节点写着德国却走了日本"这类问题在这一段定案）
@@ -282,6 +310,33 @@ function spawnDivert(port) {
   const child = spawn(process.execPath, [selfPath, 'divert', 'run', '--port=' + port, '--model=' + (flags.model || cfg.divert.model)], { detached: true, stdio: ['ignore', errFd, errFd], windowsHide: true })
   child.unref()
   log.ok('divert spawned (pid ' + child.pid + '), log: ' + logFile + ', stderr: ' + errFile)
+}
+
+async function restartDivert(port) {
+  if (netstat(port)) {
+    const ps = "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -like '*divert run*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+    const stopped = spawnSync('powershell', ['-NoProfile', '-Command', ps], {
+      encoding: 'utf8',
+      timeout: 30000,
+      windowsHide: true,
+    })
+    if (stopped.error || stopped.status !== 0) {
+      throw new Error('Failed to stop the running divert process: ' + (stopped.error?.message || stopped.stderr || stopped.status))
+    }
+    const stopDeadline = Date.now() + 10000
+    while (netstat(port) && Date.now() < stopDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+    if (netstat(port)) throw new Error('Divert is still listening on port ' + port + ' after stop.')
+  }
+
+  spawnDivert(port)
+  const startDeadline = Date.now() + 15000
+  while (!netstat(port) && Date.now() < startDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  if (!netstat(port)) throw new Error('Divert did not start listening on port ' + port + '. Check state/logs/divert-stderr.log.')
+  console.log('divert restarted on port ' + port)
 }
 
 /** 自启保活（v1.7.3）：divert 不是服务，重启/注销/崩溃都会让它消失，
@@ -531,7 +586,7 @@ async function rulesCmd(sub) {
       if (!r.exists) { console.log('  [缺] ' + r.path); continue }
       console.log((r.foreignBytes ? 'DRIFT ' : 'ok    ') + fmt(r.bytes) + 'B  ' + r.path)
       for (const b of r.blocks || []) console.log('        块 ' + (b.kind === 'ours' ? '自家' : '外来') + '  ' + b.name + '  ' + b.bytes + 'B')
-      for (const f of r.foreign || []) console.log('        ★外来词包 ' + f.name + '  ' + f.bytes + 'B  ← 每轮都进请求的 <user_rules>')
+      for (const f of r.foreign || []) console.log('        外来词包 ' + f.name + '  ' + f.bytes + 'B  ← 每轮都进请求的 <user_rules>')
       if (r.hotWords && r.hotWords.length) console.log('        触发词 ' + r.hotWords.join(','))
       total += r.foreignBytes || 0
     }
@@ -610,7 +665,7 @@ async function agyCmd(sub) {
   if (sub === 'status') {
     const st = await getAgyStatus(cfg)
     console.log('Antigravity CLI (agy) 状态')
-    console.log('  找到执行文件 : ' + (st.found ? '✅ ' + st.bin : '❌ 未找到'))
+    console.log('  找到执行文件 : ' + (st.found ? st.bin : '未找到'))
     console.log('  帮助输出响应 : ' + (st.help ? '正常' : '异常'))
     console.log('  改道代理端点 : ' + st.divertEndpoint)
     if (st.found) {
@@ -655,8 +710,8 @@ async function agyCmd(sub) {
   throw new Error('未知 agy 子命令 ' + sub + '（status/run/models/agents）')
 }
 
-const commands = { status, verify, install, divert, ls, drive, key: keyCmd, rollback, netcheck: netcheckCmd, eval: evalCmd, probe: probeCmd, seats: seatsCmd, rules: rulesCmd, agy: agyCmd }
-const SUBCOMMANDS = new Set(['divert', 'ls', 'drive', 'key', 'eval', 'probe', 'seats', 'rules', 'agy'])
+const commands = { status, verify, install, divert, ls, drive, key: keyCmd, modelmap, rollback, netcheck: netcheckCmd, eval: evalCmd, probe: probeCmd, seats: seatsCmd, rules: rulesCmd, agy: agyCmd }
+const SUBCOMMANDS = new Set(['divert', 'ls', 'drive', 'key', 'modelmap', 'eval', 'probe', 'seats', 'rules', 'agy'])
 const handler = commands[cmd]
 if (!handler) {
   console.log(`antigravity-armor
@@ -680,6 +735,7 @@ if (!handler) {
   aarmor key list [--json]
   aarmor key gen [名称]
   aarmor key revoke <Key ID|Key>
+  aarmor modelmap list|set --alias=<Claude model> --google-model=<Gemini model>
   aarmor eval build|verify|scan|report|diff|manifest [--dir=DIR] [--view=both] [--agent=FILE] [--json]
   aarmor probe bank|measure [--target=URL] [--protocol=openai] [--json]   真实端点跑分（--mock 仅离线测试）
   aarmor seats list|preview|deploy|verify|restore [--seat=gemini] [--home=DIR] [--apply]  席位词包（就地破甲，不换模型）

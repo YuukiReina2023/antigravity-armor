@@ -6,6 +6,10 @@ import {
   CLAUDE_MODELS,
   AUTHENTIC_MODELS
 } from '../src/layers/divert.mjs'
+import { listClaudeModelMappings, setClaudeModelMapping } from '../src/model-mapping.mjs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 
 export function testResolveModelRouteExact() {
   const cfg = {
@@ -26,6 +30,41 @@ export function testResolveModelRouteExact() {
   assert.equal(r.keyRef, null)
   assert.equal(r.protocol, 'anthropic')
   assert.equal(r.isClaude, true)
+}
+
+export function testClaudeModelMappingsCanBeListedAndPersisted() {
+  const root = mkdtempSync(join(tmpdir(), 'aarmor-model-mapping-'))
+  try {
+    mkdirSync(root, { recursive: true })
+    writeFileSync(join(root, 'armor.config.json'), JSON.stringify({
+      divert: {
+        modelMapping: {
+          'claude-haiku-5-5': { backend: 'antigravity', googleModel: 'gemini-3.1-pro', family: 'Haiku' },
+        },
+      },
+    }))
+    const cfg = {
+      projectRoot: root,
+      divert: {
+        modelMapping: {
+          'claude-haiku-5-5': { backend: 'antigravity', googleModel: 'gemini-3.1-pro', family: 'Haiku' },
+        },
+      },
+    }
+    assert.equal(listClaudeModelMappings(cfg)[0].googleModel, 'gemini-3.1-pro')
+
+    const updated = setClaudeModelMapping(cfg, 'claude-haiku-5-5', 'gemini-3.8-flash-high')
+    assert.equal(updated.googleModel, 'gemini-3.8-flash-high')
+    const saved = JSON.parse(readFileSync(join(root, 'armor.config.json'), 'utf8'))
+    assert.equal(saved.divert.modelMapping['claude-haiku-5-5'].googleModel, 'gemini-3.8-flash-high')
+    assert.equal(resolveModelRoute({
+      divert: saved.divert,
+    }, 'claude-haiku-5-5').googleModel, 'gemini-3.8-flash-high')
+    assert.throws(() => setClaudeModelMapping(cfg, 'claude-unknown', 'gemini-3.8-flash'), /Unsupported Claude model alias/)
+    assert.throws(() => setClaudeModelMapping(cfg, 'claude-haiku-5-5', 'gpt-4o'), /Unsupported Google model/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 }
 
 export function testResolveModelRouteCaseInsensitiveAndPrefix() {

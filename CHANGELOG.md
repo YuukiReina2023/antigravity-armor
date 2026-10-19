@@ -45,7 +45,7 @@ CLEANWIRE 档也因此一直在说谎：它宣称"一个字节自家文本都不
 - 剥空的 `<RULE[...]>` 壳与空 `<user_rules>` 外壳一并撤掉：一个空壳的
   「MUST ALWAYS FOLLOW WITHOUT ANY EXCEPTION」本身也是可疑形状。
 - `PASS-FOREIGN -N B (kovak-persona/…)` 每档都打；`PASS-SHAPE` 增报 `user_rules=…B` 与 `外来词包: …`。
-- CLEANWIRE 改为**实测**（`remainingArmor`）：`✓ 实测干净` 或 `⚠ 并不干净：外来词包仍在 […]`。
+- CLEANWIRE 改为**实测**（`remainingArmor`）：`实测干净` 或 `WARN 并不干净：外来词包仍在 […]`。
   **不再允许"只宣称没注入自家文本"就当裸奔**。
 
 ### 持久修复：`aarmor rules audit` / `aarmor rules disarm`
@@ -56,7 +56,7 @@ CLEANWIRE 档也因此一直在说谎：它宣称"一个字节自家文本都不
 $ aarmor rules audit
 DRIFT   54925B  ~/.gemini/Gemini.md
         块 自家  ARMOR-SEAT-POJIA  505B
-        ★外来词包 kovak-persona@head  40544B  ← 每轮都进请求的 <user_rules>
+        外来词包 kovak-persona@head  40544B  ← 每轮都进请求的 <user_rules>
 外来词包合计 40544B
 
 $ aarmor rules disarm --apply       # 先备份（tag pre-foreign-disarm）再写，可回滚
@@ -75,7 +75,7 @@ $ aarmor rules disarm --apply       # 先备份（tag pre-foreign-disarm）再�
   自家装甲不被误判、**工具回包里的外来词包同样要剥**、空壳清理、
   幂等、形状体检报 `user_rules`/外来词包、`remainingArmor` 能看见 CLEANWIRE 以前看不见的东西、
   **端到端：7 档每一档出站都不含 Kovak/`.spud` 且保留客户端静态提示**、
-  裸奔档必须 `✓ 实测干净`。
+  裸奔档必须 `实测干净`。
 - `test/rulescan.test.mjs`（9 例）：审计数值必须等于实际可摘除量、预览不写盘、
   写入留备份且备份等于原文、自己的块不被删、幂等、缺文件安全、路径去重。
 
@@ -130,7 +130,7 @@ PASS-SHAPE contents=1条/1片 204B system=2片/47341B(含自家注入@1) tools=4
 "历史在 contents 里"的假设上，而那个假设从未被验证过一次。
 
 `PASS-NARROW` 同时补上实话：当 `contents <= 2` 时直接标注
-「⚠ 结构上收窄无意义：本端点 contents 仅 N 条，会话历史在服务端（sessionId 索引）」。
+「WARN 结构上收窄无意义：本端点 contents 仅 N 条，会话历史在服务端（sessionId 索引）」。
 
 中性替代文案重写：说清触发点在会话上下文、已试过哪 7 档（含裸奔与换号）、
 并给出结论（**这段历史已被标记且在服务端**）与唯一有效动作（新建对话）。
@@ -473,7 +473,7 @@ due to bad network reputation (AS20473)
 2. **`status` 上游健康判读**（`src/diag/upstream.mjs`）：
    只看**最后一次 200 之后**发生的事 —— 早先的 401 之后又恢复 200 的，不挂告警（否则历史噪声永远在）。
    ```
-   ⚠ 账号态 上游最近 2 次请求失败（401，最后一次 23:52:39），在此之前 23:28:31 还是 200
+   WARN 账号态 上游最近 2 次请求失败（401，最后一次 23:52:39），在此之前 23:28:31 还是 200
      账号登录态失效（令牌被上游拒）—— 在 Antigravity 里重新登录即可。代理链路本身是通的。
      判据：路径/剥离字节数与成功那次完全一致，唯一变量是令牌 —— 不是破甲问题。
    ```

@@ -205,5 +205,5 @@ export async function testCleanWireNowProvesItIsActuallyClean() {
   const { logs } = await runOnce('<user_rules>' + FIX + '</user_rules>\n<identity>You are Antigravity</identity>', 7)
   const cw = logs.filter((l) => l.includes('PASS-CLEANWIRE'))
   assert.ok(cw.length >= 1, '要有裸奔档')
-  assert.ok(cw.some((l) => l.includes('✓ 实测干净')), '裸奔档必须**实测**干净，而不是只宣称"没注入自家文本"（实际: ' + cw.join(' | ') + '）')
+  assert.ok(cw.some((l) => l.includes('实测干净')), '裸奔档必须**实测**干净，而不是只宣称"没注入自家文本"（实际: ' + cw.join(' | ') + '）')
 }

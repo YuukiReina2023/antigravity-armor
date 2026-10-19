@@ -190,7 +190,7 @@ node src/cli.mjs divert watchdog             # 手动跑常驻看门狗（--inte
 
 ```powershell
 (Get-NetTCPConnection -LocalPort 50100 -State Listen -ErrorAction SilentlyContinue | Measure-Object).Count   # 0 = 代理没了
-node src/cli.mjs status | Select-String 'divert|⚠'                                                          # 致命组合会被喊出来
+node src/cli.mjs status | Select-String 'divert|WARN'                                                        # 致命组合会被喊出来
 Get-Content state\logs\divert-watchdog.log -Tail 5                                                          # 看门狗有没有救回
 ```
 
@@ -208,7 +208,7 @@ node src/cli.mjs install --layer=ide --apply # 之后可以再打回来
 IDE 报 `Agent terminated due to error` 时，**不要先怀疑装甲**。`status` 现在直接给出判读：
 
 ```powershell
-node src/cli.mjs status          # 末几行会直接写「⚠ 账号态 /  配额 /  上游」或「上游健康」
+node src/cli.mjs status          # 末几行会直接写「WARN 账号态 /  配额 /  上游」或「上游健康」
 node src/cli.mjs divert log      # 找 PASS-AUTH / PASS-QUOTA / PASS-UPSTREAM 原文
 ```
 
@@ -257,8 +257,8 @@ aarmor rules disarm --apply # 写入：先备份（tag pre-foreign-disarm）再�
 | `PASS-FOREIGN 外来词包 -0B 无` | 出站没有外来词包（正常） |
 | `PASS-FOREIGN 外来词包 -22504B (kovak-persona/22504B)` | 出站带着别人的词包，已被剥 |
 | `PASS-SHAPE … user_rules=22790B 外来词包: kovak-persona@head` | 形状体检点名了它 —— 这是排查入口 |
-| `PASS-CLEANWIRE … ✓ 实测干净` | 裸奔档真的裸（实测无自家片段/无外来词包/系统位无注入） |
-| `PASS-CLEANWIRE … ⚠ 并不干净：外来词包仍在 […]` | 裸奔档没剥干净，先修这个再看别的 |
+| `PASS-CLEANWIRE … 实测干净` | 裸奔档真的裸（实测无自家片段/无外来词包/系统位无注入） |
+| `PASS-CLEANWIRE … WARN 并不干净：外来词包仍在 […]` | 裸奔档没剥干净，先修这个再看别的 |
 
 > **教训**：v1.8.0 → v1.8.2 三轮我都在"洗词 + 收窄 + 换会话号"上打转，
 > 而真凶一直安静地躺在 `<user_rules>` 里 —— 因为**词表判据看不见它**。
@@ -301,7 +301,7 @@ node -e "const l=require('fs').readFileSync('state/logs/divert.log','utf8').spli
 | 日志形状 | 读法 |
 |---|---|
 | `PASS-CLEANWIRE … 系统位无自家注入` | 裸奔档真的裸了（对照有效） |
-| `PASS-CLEANWIRE … ⚠ 系统位仍有自家注入@N` | 自家文本没撤干净，对照被污染，先修这个 |
+| `PASS-CLEANWIRE … WARN 系统位仍有自家注入@N` | 自家文本没撤干净，对照被污染，先修这个 |
 | `PASS-SESSROT … -> -9…` 之后仍 `PASS-INBAND-BLOCK` | **服务端历史不是唯一触发源**，与静态提示/工具声明/当前请求有关 |
 | `PASS-SESSROT` 之后 `PASS-UPSTREAM 400/404` | 服务端不认自造会话号 → 号必须由端点签发，关掉 `rotateSession` |
 | 换号后**通过**了 | 触发源就是服务端历史本身 → 这类会话只能靠换号/新建对话 |
@@ -426,8 +426,8 @@ divert 直连出口 IP : 199.247.20.29
 归属: Germany / The Constant Company, LLC
 ASN : AS20473 The Constant Company, LLC   [hosting/datacenter]
 
-判读: ⚠ 199.247.20.29  Germany  AS20473 (Vultr / Choopa)
-  ⚠ 出口是**机房 IP**：AS20473（Vultr / Choopa）—— 风控常判为「无法确认位置」。
+判读: WARN 199.247.20.29  Germany  AS20473 (Vultr / Choopa)
+  WARN 出口是**机房 IP**：AS20473（Vultr / Choopa）—— 风控常判为「无法确认位置」。
     修法：换一条家宽/中转/专线节点，别用裸机房 IP。
 ```
 
@@ -454,7 +454,7 @@ named pipe `\\.\pipe\verge-mihomo`）：
   Google 类流量实际链路:
     accounts.google.com     → ["onlinespace-hy2","AUTO","PROXY"]
   → 真正承载: onlinespace-hy2
-  ⚠ 主组「PROXY」挂在**自动测速组**「AUTO」上 → 你在界面上手选的节点**不生效**，
+  WARN 主组「PROXY」挂在**自动测速组**「AUTO」上 → 你在界面上手选的节点**不生效**，
     走哪个国家由自动测速决定。修法：点「PROXY」组，选**具体节点**（不要选 AUTO）。
 ```
 

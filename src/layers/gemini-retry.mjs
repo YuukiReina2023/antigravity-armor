@@ -140,7 +140,7 @@ export function cleanArmorText(t) {
 /** 剥掉我们自己注入/安装的装甲文本（出站给 Google 前必须干净）。
  *  v1.7.1：净化面从 3 条正则扩到「3 条正则 + 本机实际装过的装甲原文」，**并返回剥掉的字符数**。
  *
- *  ⚠ 返回值而不是在请求体上加计数字段：这个对象就是出站 JSON 本身，
+ *  注意返回值而不是在请求体上加计数字段：这个对象就是出站 JSON 本身，
  *   往里塞一个 `__armorStripped` 会被上游按未知字段直接 400
  *   （实测：`Unknown name "__armorStripped": Cannot find field.` → 四档全 400、客户端拿空回复）。
  *   取证信息一律走返回值，绝不污染报文。 */
@@ -226,7 +226,7 @@ const firstIndexOfAny = (s, needles) => {
 
 /** 一份文本里有哪些外来词包（返回可剥离的片段）。
  *
- *  ⚠ 关键约束（第一版写错、被测试抓住）：签名命中时**绝不能把整段都当外来词包剥**。
+ *  关键约束（第一版写错、被测试抓住）：签名命中时**绝不能把整段都当外来词包剥**。
  *  实测报文里外来 persona 与客户端自己的 <identity> 常常在同一片里，
  *  整段剥会连客户端的静态系统提示一起删掉。所以只取**最小的包含区域**：
  *    ① 含签名的 <RULE[...]> 块（最精确）
@@ -264,7 +264,7 @@ export function findForeignPacks(text) {
  *  顺带清掉因此变空的 <RULE[...]> 壳与 <user_rules> 壳 ——
  *  一个空壳的「MUST ALWAYS FOLLOW WITHOUT ANY EXCEPTION」本身也是可疑形状。
  *
- *  ⚠ 必须**深度遍历**（v1.8.1 rewriteDeep 的同一个教训）：外来词包会经
+ *  必须**深度遍历**（v1.8.1 rewriteDeep 的同一个教训）：外来词包会经
  *  functionResponse.response（工具回包里装着整份文件）再进一次请求，
  *  只扫 systemInstruction 与 parts[].text 会漏掉它。 */
 export function stripForeignArmor(parsed) {
@@ -672,7 +672,7 @@ export const SAFE_DELIVERABLE_DIRECTIVE = [
  * 从 SSE 响应体抽出正文（跳过 thought 思考块）—— 直通车道要拿它做拒答判定
  *  thought 单独回传：正文零内容时，拒答常常只活在思考流里（隐藏面，实测漏检点）
  *
- *  ⚠ v1.7.2 修的致命形状 bug：**真实上游的每一帧都是包在 `response` 里的**
+ *  v1.7.2 修的致命形状 bug：**真实上游的每一帧都是包在 `response` 里的**
  *    `{"response":{"candidates":[…]},"traceId":"…","metadata":{}}`
  *  （`src/probe/run.mjs` 早就按 `j.response?.candidates` 读了，`convert.mjs` 的
  *   `geminiEvent()` 也是这么吐的 —— 只有这个函数按裸形状读 `j.candidates`）。
@@ -1072,11 +1072,11 @@ export async function handleSmartPassthrough({ req, res, body, headers, cfg, arm
           + ' safetySettings=' + (sh.safety ? 'BLOCK_NONE（第 0 档注入残留）' : '原样')
           + ' 洗词 ' + n + ' 处'
           + (dirty
-            ? '  ⚠ 并不干净：'
+            ? '  WARN 并不干净：'
               + (rem.foreign.length ? '外来词包仍在 [' + rem.foreign.join(',') + ']' : '')
               + (rem.own ? ' 自家片段 ' + rem.own + ' 段' : '')
               + (sh.ourDirective >= 0 ? ' 系统位仍有自家注入@' + sh.ourDirective : '')
-            : '  ✓ 实测干净（无自家片段、无外来词包、系统位无注入）'))
+            : '  实测干净（无自家片段、无外来词包、系统位无注入）'))
       }
       // 换会话号：唯一能逃出「服务端已中毒会话」的杠杆（默认开，rotateSession=false 可关）
       if (rotateSession && d.rotateSession !== false) {
@@ -1106,7 +1106,7 @@ export async function handleSmartPassthrough({ req, res, body, headers, cfg, arm
           : ' 保留 ' + nr.kept + ' 条（丢 ' + nr.dropped + ' 条）')
           + ' 截断工具回包 ' + nr.truncated + ' 处'
           // v1.8.2：把这个端点的事实说清楚 —— 否则「保留 1 条」会被误读成"已经够窄"
-          + (sh.contents <= 2 ? '  ⚠ 结构上收窄无意义：本端点 contents 仅 ' + sh.contents + ' 条，'
+          + (sh.contents <= 2 ? '  WARN 结构上收窄无意义：本端点 contents 仅 ' + sh.contents + ' 条，'
             + '会话历史在服务端（sessionId 索引），出站内容碰不到它' : ''))
       }
       rawToSend = JSON.stringify(v)

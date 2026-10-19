@@ -84,21 +84,21 @@ export function assessExit({ ip, geo, nodeEgressEqualsProxy, proxyConfigured }) 
   if (proxyConfigured && nodeEgressEqualsProxy === false) {
     ok = false
     // 这一条最要命：系统代理只给浏览器用，Node 不读它 —— divert 会绕过代理直连出去
-    hints.push('⚠ 这台机器的 Node/divert 出口与「显式走代理」的出口**不一致** → divert 在直连，没走代理。')
+    hints.push('WARN 这台机器的 Node/divert 出口与「显式走代理」的出口**不一致** → divert 在直连，没走代理。')
     hints.push('  修法：给代理加 TUN 模式（全局接管），或让 divert 走代理（HTTPS_PROXY + CONNECT 隧道）。')
   }
   if (asnKey && FLAGGED_ASNS[asnKey]) {
     ok = false
-    hints.push('⚠ 出口是**机房 IP**：' + asnKey + '（' + FLAGGED_ASNS[asnKey] + '）—— 风控常判为「无法确认位置」。')
+    hints.push('WARN 出口是**机房 IP**：' + asnKey + '（' + FLAGGED_ASNS[asnKey] + '）—— 风控常判为「无法确认位置」。')
     hints.push('  修法：换一条家宽/中转/专线节点，别用裸机房 IP。')
   } else if (geo && geo.hosting) {
     ok = false
-    hints.push('⚠ 出口被标记为 hosting/datacenter（' + (geo.isp || '') + '）—— 同样是机房 IP。')
+    hints.push('WARN 出口被标记为 hosting/datacenter（' + (geo.isp || '') + '）—— 同样是机房 IP。')
   }
   const country = geo ? geo.country : ''
   if (country && KNOWN_UNSUPPORTED.includes(country)) {
     ok = false
-    hints.push('⚠ 出口国家「' + country + '」在 Antigravity 不可用地区里。')
+    hints.push('WARN 出口国家「' + country + '」在 Antigravity 不可用地区里。')
   }
   if (ok) hints.push('出口看起来可用（非机房/非受限地区）。若仍被拒，问题在账号侧（见 aarmor status 的账号判读）。')
   return {

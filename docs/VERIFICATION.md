@@ -50,13 +50,13 @@
 
 | 探针 | 形状 | 契约 | 实测 |
 |---|---|---|---|
-| P22 | 只回工具调用（agentic 常态） | attempts=1，不触发空补全重试 | tool-call@1 ✓ |
-| P23 | 交付后补拒绝（纯文本尾） | 完整拒绝被拦（fullLeak=false） | ✓（chars=1248 交付完整） |
-| P24 | 交付后补拒绝（围栏内） | **不拦**（宁放过不误伤真代码） | fullLeak=true ✓ |
-| P25 | finish_reason=content_filter | finish 信号驱动升档 | delivered@3 ✓ |
-| P26 | maxOutputTokens=512 截断 | 翻倍预算捞回 | delivered@2 ✓ |
-| P27 | 预填+抖动缺一不可 | 两杠杆同档到位才松口 | delivered@3 ✓ |
-| P29 | 预填档上的工具调用 | 不触发预填退回（不白烧上游） | tool-call@3 ✓ |
+| P22 | 只回工具调用（agentic 常态） | attempts=1，不触发空补全重试 | tool-call@1 PASS |
+| P23 | 交付后补拒绝（纯文本尾） | 完整拒绝被拦（fullLeak=false） | PASS（chars=1248 交付完整） |
+| P24 | 交付后补拒绝（围栏内） | **不拦**（宁放过不误伤真代码） | fullLeak=true PASS |
+| P25 | finish_reason=content_filter | finish 信号驱动升档 | delivered@3 PASS |
+| P26 | maxOutputTokens=512 截断 | 翻倍预算捞回 | delivered@2 PASS |
+| P27 | 预填+抖动缺一不可 | 两杠杆同档到位才松口 | delivered@3 PASS |
+| P29 | 预填档上的工具调用 | 不触发预填退回（不白烧上游） | tool-call@3 PASS |
 
 ## 6. 在线 divert 状态与真实流量复查（v1.4.1 后）
 

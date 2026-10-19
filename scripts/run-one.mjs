@@ -44,7 +44,6 @@ const timer = setTimeout(() => {
   console.log('HUNG >> ' + name + ' (>' + timeout + 'ms) —— 多半是某个 await 永远不返回（请求没被消费 / 服务没起）')
   process.exit(3)
 }, timeout)
-if (timer.unref) timer.unref()
 try {
   await fn()
   console.log('OK   ' + name + '  (' + (Date.now() - t0) + 'ms)')
