@@ -47,3 +47,12 @@ export function tokenLine(t) {
   }
   return 'AUTH-INFO ' + shape + '（opaque 令牌，无法本地判有效期）'
 }
+
+/** Describe the credential header used by a compatibility API request without logging its value. */
+export function requestCredentialLine(headers = {}) {
+  const authorization = headers.authorization
+  if (authorization) return tokenLine(describeToken(authorization))
+  if (headers['x-api-key']) return 'AUTH-INFO 客户端使用 x-api-key 头（密钥值不记录）'
+  if (headers['api-key']) return 'AUTH-INFO 客户端使用 api-key 头（密钥值不记录）'
+  return tokenLine(describeToken(''))
+}

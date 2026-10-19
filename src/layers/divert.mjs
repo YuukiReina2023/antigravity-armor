@@ -14,7 +14,7 @@ import { geminiToOpenAI, geminiEvent, createStreamAccumulator } from '../proto/c
 import { OPENAI_SSE_DONE } from '../proto/openai-sse.mjs'
 import { resolveKey } from '../credentials.mjs'
 import { log } from '../log.mjs'
-import { describeToken, tokenLine } from '../diag/token.mjs'
+import { requestCredentialLine } from '../diag/token.mjs'
 import { probeToken, tokenInfoLine } from '../diag/tokeninfo.mjs'
 import { parseFlag } from '../diag/ls.mjs'
 import { newConversation, convDb } from '../driver/session.mjs'
@@ -943,7 +943,7 @@ export function createDivertServer(cfg, opts = {}) {
       // 令牌体检（v1.7.6）：401 的两种成因（令牌过期 vs 令牌新鲜但被拒）长得一样，
       // 只报形态与有效期就能当场分开。永不打印令牌本身。
       if (cfg.divert.authDiag !== false) {
-        try { say(tokenLine(describeToken(req.headers.authorization))) } catch {}
+        try { say(requestCredentialLine(req.headers)) } catch {}
       }
 
       if (req.method === 'OPTIONS') {

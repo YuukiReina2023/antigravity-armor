@@ -37,6 +37,7 @@ public class MainWindowViewModel : ViewModelBase
 
     // 跑分与评测
     private string _probeOutput = "默认直连本机 50100 反代 API；请先启动代理并确认授权密钥有效。";
+    private string _selectedProbeModel = "claude-haiku-5-5";
     private bool _isProbeRunning = false;
     private string _evalOutput = "点击【运行隐匿评测】可对 6 类证据隐匿手法（零宽、ADS、同形字等）进行加固视角检测比对。";
     private bool _isEvalRunning = false;
@@ -64,6 +65,15 @@ public class MainWindowViewModel : ViewModelBase
         "gemini-3.1-pro-high",
         "claude-sonnet-4-6",
         "claude-opus-4-6-thinking"
+    };
+
+    public ObservableCollection<string> AvailableProbeModels { get; } = new()
+    {
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5",
+        "claude-opus-5-5",
+        "claude-fable-5-1",
+        "claude-mythos-5-1"
     };
 
     public ObservableCollection<string> AvailableModes { get; } = new()
@@ -99,6 +109,7 @@ public class MainWindowViewModel : ViewModelBase
     public bool IsAgyBusy { get => _isAgyBusy; set => SetProperty(ref _isAgyBusy, value); }
 
     public string ProbeOutput { get => _probeOutput; set => SetProperty(ref _probeOutput, value); }
+    public string SelectedProbeModel { get => _selectedProbeModel; set => SetProperty(ref _selectedProbeModel, value); }
     public bool IsProbeRunning { get => _isProbeRunning; set => SetProperty(ref _isProbeRunning, value); }
     public string EvalOutput { get => _evalOutput; set => SetProperty(ref _evalOutput, value); }
     public bool IsEvalRunning { get => _isEvalRunning; set => SetProperty(ref _isEvalRunning, value); }
@@ -299,9 +310,9 @@ public class MainWindowViewModel : ViewModelBase
     {
         IsProbeRunning = true;
         (RunProbeCommand as RelayCommand)?.RaiseCanExecuteChanged();
-        ProbeOutput = "正在直连 50100 反代 API 逐条发送真实探针，并统计 HTTP 状态、TTFB、交付字符数与最终拒答...\n";
+        ProbeOutput = $"正在使用模型 {SelectedProbeModel} 直连 50100 反代 API 逐条发送真实探针，并统计 HTTP 状态、TTFB、交付字符数与最终拒答...\n";
 
-        await _cliService.RunNodeCliAsync("probe measure", line =>
+        await _cliService.RunNodeCliAsync($"probe measure --model={QuoteArgument(SelectedProbeModel)}", line =>
         {
             ProbeOutput += line + "\n";
         });

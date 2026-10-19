@@ -5,7 +5,7 @@
 // 硬约束：这些用例同时锁死「令牌永不进入任何返回值」。
 import assert from 'node:assert/strict'
 import { probeToken, tokenInfoLine } from '../src/diag/tokeninfo.mjs'
-import { describeToken, tokenLine } from '../src/diag/token.mjs'
+import { describeToken, requestCredentialLine, tokenLine } from '../src/diag/token.mjs'
 
 const SECRET = 'ya29.SUPERSECRETVALUE_should_never_appear_anywhere_0123456789'
 
@@ -64,4 +64,13 @@ export async function testDescribeTokenHandlesRealGoogleShape() {
   assert.equal(d.expired, null, '不透明令牌不能假装知道过期与否')
   assert.equal(d.len, real.length)
   assert.match(tokenLine(d), /opaque 令牌，无法本地判有效期/)
+}
+
+export function testRequestCredentialLineRecognizesAnthropicApiKeyWithoutLeakingIt() {
+  const line = requestCredentialLine({ 'x-api-key': SECRET })
+  assert.match(line, /使用 x-api-key 头/)
+  assert.match(line, /密钥值不记录/)
+  assert.ok(!line.includes(SECRET))
+  assert.match(requestCredentialLine({ 'api-key': SECRET }), /使用 api-key 头/)
+  assert.match(requestCredentialLine({}), /无 Authorization 头/)
 }
