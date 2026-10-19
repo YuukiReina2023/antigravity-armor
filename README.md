@@ -50,7 +50,7 @@ node src/cli.mjs agy status            # 查看 agy CLI 对接状态
 ```powershell
 # 运行 Avalonia UI 客户端
 dotnet run --project ui/AntigravityArmor.UI
-# 或双击根目录下的 aarmor-ui.cmd
+# 或双击根目录下的 ui.bat（也可用 aarmor-ui.cmd）
 ```
 
 ## 常用命令
