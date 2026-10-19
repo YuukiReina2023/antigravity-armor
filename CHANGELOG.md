@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — API 兼容端点改用 AGY CLI，整理控制台入口
+
+- `/v1/messages` 与 `/v1/chat/completions` 统一通过独立 AGY CLI 请求生成；不再探测桌面 Language Server，也不回退到配置的外部模型端点。
+- AGY 子进程清除仅对该子进程生效的网关端点覆盖，避免请求递归回 50100；桌面端现有 `/v1internal` 代理路径不变。
+- 总览页增加 OpenAI / Claude API 端点复制、最近网关日志和系统操作日志；工作台执行模式改为圆角按钮组选项。
+
 ## v1.8.3 — 真凶：**一份外来 persona 词包每轮都随请求出站**（占 part0 的 49.7%）
 
 用户第 N 次贴回中性替代文案。这次逐字节拆出站体，在 `part0` 里找到了它：

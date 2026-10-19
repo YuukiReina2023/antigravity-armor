@@ -113,7 +113,7 @@ export async function testConversationHistoryReadsOrderedMessagesAndMetadata() {
   }
 }
 
-export async function testClaudeAliasReportsAgentapiFailureSeparatelyFromMissingServer() {
+export async function testClaudeAliasReportsAgyCliFailure() {
   const cfg = {
     logDir: 'state/logs',
     divert: {
@@ -129,7 +129,7 @@ export async function testClaudeAliasReportsAgentapiFailureSeparatelyFromMissing
   const { server } = createDivertServer(cfg, {
     key: 'test',
     findRunningLs: async () => ({ httpPort: 49459, csrf: 'test-csrf' }),
-    newConversation: () => { throw new Error('agentapi exited (1)') },
+    runAgyPrompt: async () => ({ stdout: '', stderr: 'AGY failed', code: 1, failed: true }),
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 
@@ -145,8 +145,7 @@ export async function testClaudeAliasReportsAgentapiFailureSeparatelyFromMissing
     })
     const body = await response.json()
     assert.equal(response.status, 502)
-    assert.match(body.error.message, /Language Server was found/)
-    assert.match(body.error.message, /agentapi exited/)
+    assert.match(body.error.message, /AGY CLI failed/)
   } finally {
     server.closeAllConnections()
     await new Promise((resolve) => server.close(resolve))
@@ -195,11 +194,8 @@ function assistantPayload(text) {
 
 export async function testClaudeAliasesUseLocalGoogleBackendForBothProtocols() {
   const root = mkdtempSync(join(tmpdir(), 'aarmor-claude-alias-'))
-  const conversationRoot = join(root, 'conversations')
-  mkdirSync(conversationRoot, { recursive: true })
   const cfg = {
     logDir: join(root, 'logs'),
-    paths: { convRoots: [conversationRoot] },
     divert: {
       port: 0,
       upstream: 'http://127.0.0.1:59999',
@@ -215,19 +211,14 @@ export async function testClaudeAliasesUseLocalGoogleBackendForBothProtocols() {
     },
   }
   const created = []
-  const createConversation = (_cfg, prompt, options) => {
-    const id = `local-${created.length}`
-    const db = new DatabaseSync(join(conversationRoot, id + '.db'))
-    db.exec('CREATE TABLE steps (idx INTEGER, status INTEGER, step_type INTEGER, step_payload BLOB)')
-    db.prepare('INSERT INTO steps VALUES (?, ?, ?, ?)').run(1, 3, 15, assistantPayload('Google-backed local reply'))
-    db.close()
-    created.push({ id, prompt, model: options.model })
-    return { id }
-  }
   const { server } = createDivertServer(cfg, {
     key: 'test',
-    findRunningLs: async () => ({ httpPort: 50095, csrf: 'test-csrf' }),
-    newConversation: createConversation,
+    findRunningLs: async () => { throw new Error('API requests must not inspect the desktop Language Server') },
+    newConversation: () => { throw new Error('API requests must not create desktop conversations') },
+    runAgyPrompt: async (_cfg, options) => {
+      created.push({ prompt: options.prompt, model: options.model, direct: options.direct })
+      return { stdout: 'Google-backed local reply\n', stderr: '', code: 0 }
+    },
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const base = `http://127.0.0.1:${server.address().port}`
@@ -287,9 +278,41 @@ export async function testClaudeAliasesUseLocalGoogleBackendForBothProtocols() {
     assert.equal(openAiResponse.status, 200)
     assert.equal(openAiBody.model, 'claude-sonnet-5-5')
     assert.equal(openAiBody.choices[0].message.content, 'Google-backed local reply')
-    assert.deepEqual(created.map((row) => row.model), ['pro', 'flash'])
+    assert.deepEqual(created.map((row) => row.model), ['gemini-3.1-pro', 'gemini-3.8-flash-high'])
+    assert.deepEqual(created.map((row) => row.direct), [true, true])
     assert.match(created[0].prompt, /Native request/)
     assert.match(created[1].prompt, /OpenAI-compatible request/)
+
+    const anthropicStream = await fetch(base + '/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': 'local-api-key-for-tests' },
+      body: JSON.stringify({
+        model: 'claude-opus-5-5',
+        max_tokens: 200,
+        stream: true,
+        messages: [{ role: 'user', content: 'Streaming Claude request' }],
+      }),
+    })
+    const anthropicEvents = await anthropicStream.text()
+    assert.equal(anthropicStream.status, 200)
+    assert.match(anthropicEvents, /event: message_start/)
+    assert.match(anthropicEvents, /Google-backed local reply/)
+    assert.match(anthropicEvents, /event: message_stop/)
+
+    const openAiStream = await fetch(base + '/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: '******' },
+      body: JSON.stringify({
+        model: 'gemini-3.8-flash',
+        stream: true,
+        messages: [{ role: 'user', content: 'Streaming OpenAI request' }],
+      }),
+    })
+    const openAiEvents = await openAiStream.text()
+    assert.equal(openAiStream.status, 200)
+    assert.match(openAiEvents, /chat\.completion\.chunk/)
+    assert.match(openAiEvents, /Google-backed local reply/)
+    assert.match(openAiEvents, /data: \[DONE\]/)
   } finally {
     server.closeAllConnections()
     await new Promise((resolve) => server.close(resolve))
@@ -317,7 +340,15 @@ export async function testClaudeAliasDoesNotFallBackToConfiguredExternalTarget()
       },
     },
   }
-  const { server } = createDivertServer(cfg, { key: 'test', findRunningLs: async () => null })
+  const requestedModels = []
+  const { server } = createDivertServer(cfg, {
+    key: 'test',
+    findRunningLs: async () => { throw new Error('API requests must not inspect the desktop Language Server') },
+    runAgyPrompt: async (_cfg, options) => {
+      requestedModels.push(options.model)
+      return { stdout: 'AGY local response', stderr: '', code: 0 }
+    },
+  })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 
   try {
@@ -331,8 +362,8 @@ export async function testClaudeAliasDoesNotFallBackToConfiguredExternalTarget()
       }),
     })
     const body = await response.json()
-    assert.equal(response.status, 503)
-    assert.match(body.error.message, /Start Antigravity/)
+    assert.equal(response.status, 200)
+    assert.equal(body.content[0].text, 'AGY local response')
 
     const openAiResponse = await fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, {
       method: 'POST',
@@ -343,8 +374,9 @@ export async function testClaudeAliasDoesNotFallBackToConfiguredExternalTarget()
       }),
     })
     const openAiBody = await openAiResponse.json()
-    assert.equal(openAiResponse.status, 503)
-    assert.match(openAiBody.error.message, /Start Antigravity/)
+    assert.equal(openAiResponse.status, 200)
+    assert.equal(openAiBody.choices[0].message.content, 'AGY local response')
+    assert.deepEqual(requestedModels, ['gemini-3.8-flash', 'gemini-3.8-flash'])
   } finally {
     server.closeAllConnections()
     await new Promise((resolve) => server.close(resolve))

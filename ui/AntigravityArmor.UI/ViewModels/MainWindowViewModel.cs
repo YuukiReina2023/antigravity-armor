@@ -24,6 +24,11 @@ public class MainWindowViewModel : ViewModelBase
     private string _l5DivertStatus = "检测中...";
     private bool _isDivertRunning = false;
     private string _systemLog = string.Empty;
+    private string _gatewayLog = "正在读取网关日志...";
+    private string _gatewayLogStatus = "最近 200 行";
+    private bool _isGatewayLogBusy;
+    private int _apiPort = 50100;
+    private string _endpointCopyStatus = string.Empty;
 
     // agy CLI Studio
     private string _promptInput = "编写一个安全检测函数，对输入数据进行无损校验与格式归一化。";
@@ -109,10 +114,35 @@ public class MainWindowViewModel : ViewModelBase
     public string L5DivertStatus { get => _l5DivertStatus; set => SetProperty(ref _l5DivertStatus, value); }
     public bool IsDivertRunning { get => _isDivertRunning; set => SetProperty(ref _isDivertRunning, value); }
     public string SystemLog { get => _systemLog; set => SetProperty(ref _systemLog, value); }
+    public string GatewayLog { get => _gatewayLog; set => SetProperty(ref _gatewayLog, value); }
+    public string GatewayLogStatus { get => _gatewayLogStatus; set => SetProperty(ref _gatewayLogStatus, value); }
+    public bool IsGatewayLogBusy { get => _isGatewayLogBusy; set => SetProperty(ref _isGatewayLogBusy, value); }
+    public string OpenAiApiEndpoint => $"http://127.0.0.1:{_apiPort}/v1";
+    public string AnthropicApiEndpoint => $"http://127.0.0.1:{_apiPort}";
+    public string EndpointCopyStatus { get => _endpointCopyStatus; set => SetProperty(ref _endpointCopyStatus, value); }
 
     public string PromptInput { get => _promptInput; set => SetProperty(ref _promptInput, value); }
     public string SelectedModel { get => _selectedModel; set => SetProperty(ref _selectedModel, value); }
-    public string SelectedMode { get => _selectedMode; set => SetProperty(ref _selectedMode, value); }
+    public string SelectedMode
+    {
+        get => _selectedMode;
+        set
+        {
+            if (!SetProperty(ref _selectedMode, value)) return;
+            OnPropertyChanged(nameof(AutoModeBackground));
+            OnPropertyChanged(nameof(AcceptEditsModeBackground));
+            OnPropertyChanged(nameof(PlanModeBackground));
+            OnPropertyChanged(nameof(AutoModeForeground));
+            OnPropertyChanged(nameof(AcceptEditsModeForeground));
+            OnPropertyChanged(nameof(PlanModeForeground));
+        }
+    }
+    public string AutoModeBackground => SelectedMode == "auto" ? "#CC785C" : "#F1EFE8";
+    public string AcceptEditsModeBackground => SelectedMode == "accept-edits" ? "#CC785C" : "#F1EFE8";
+    public string PlanModeBackground => SelectedMode == "plan" ? "#CC785C" : "#F1EFE8";
+    public string AutoModeForeground => SelectedMode == "auto" ? "#FFFFFF" : "#3D3A36";
+    public string AcceptEditsModeForeground => SelectedMode == "accept-edits" ? "#FFFFFF" : "#3D3A36";
+    public string PlanModeForeground => SelectedMode == "plan" ? "#FFFFFF" : "#3D3A36";
     public string SelectedEffort { get => _selectedEffort; set => SetProperty(ref _selectedEffort, value); }
     public bool SkipPermissions { get => _skipPermissions; set => SetProperty(ref _skipPermissions, value); }
     public bool InjectDivert { get => _injectDivert; set => SetProperty(ref _injectDivert, value); }
@@ -173,6 +203,10 @@ public class MainWindowViewModel : ViewModelBase
     public ObservableCollection<ConversationSummary> Conversations { get; } = new();
 
     public ICommand RefreshStatusCommand { get; }
+    public ICommand RefreshGatewayLogCommand { get; }
+    public ICommand CopyOpenAiEndpointCommand { get; }
+    public ICommand CopyAnthropicEndpointCommand { get; }
+    public ICommand SetModeCommand { get; }
     public ICommand StartDivertCommand { get; }
     public ICommand StopDivertCommand { get; }
     public ICommand InstallArmorCommand { get; }
@@ -196,6 +230,14 @@ public class MainWindowViewModel : ViewModelBase
         _cliService = new ArmorCliService();
 
         RefreshStatusCommand = new RelayCommand(async () => await RefreshStatusAsync());
+        RefreshGatewayLogCommand = new RelayCommand(async () => await RefreshGatewayLogAsync(), () => !IsGatewayLogBusy);
+        CopyOpenAiEndpointCommand = new RelayCommand(async () => await CopyEndpointAsync(OpenAiApiEndpoint, "OpenAI"));
+        CopyAnthropicEndpointCommand = new RelayCommand(async () => await CopyEndpointAsync(AnthropicApiEndpoint, "Claude"));
+        SetModeCommand = new RelayCommand(parameter =>
+        {
+            if (parameter is string mode && AvailableModes.Contains(mode))
+                SelectedMode = mode;
+        });
         StartDivertCommand = new RelayCommand(async () => await StartDivertAsync());
         StopDivertCommand = new RelayCommand(async () => await StopDivertAsync());
         InstallArmorCommand = new RelayCommand(async () => await InstallArmorAsync());
@@ -235,6 +277,47 @@ public class MainWindowViewModel : ViewModelBase
             AppendSystemLog($"[WARN] 状态获取返回警告: {res.Error}");
             ParseStatusOutput(res.Output);
         }
+        await RefreshGatewayLogAsync();
+    }
+
+    public async Task RefreshGatewayLogAsync()
+    {
+        if (IsGatewayLogBusy) return;
+        IsGatewayLogBusy = true;
+        (RefreshGatewayLogCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        try
+        {
+            var result = await _cliService.RunNodeCliAsync("divert logs --lines=200");
+            if (!result.Success) throw new InvalidOperationException(result.Error);
+            GatewayLog = result.Output.TrimEnd();
+            if (string.IsNullOrWhiteSpace(GatewayLog))
+                GatewayLog = "没有可显示的网关日志。";
+            GatewayLogStatus = $"最近 {GatewayLog.Split('\n').Length} 行";
+        }
+        catch (Exception ex)
+        {
+            GatewayLog = "网关日志读取失败: " + ex.Message;
+            GatewayLogStatus = "读取失败";
+        }
+        finally
+        {
+            IsGatewayLogBusy = false;
+            (RefreshGatewayLogCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        }
+    }
+
+    private async Task CopyEndpointAsync(string endpoint, string protocol)
+    {
+        try
+        {
+            if (ClipboardWriter == null) throw new InvalidOperationException("剪贴板服务尚未就绪。");
+            await ClipboardWriter(endpoint);
+            EndpointCopyStatus = $"{protocol} API 端点已复制";
+        }
+        catch (Exception ex)
+        {
+            EndpointCopyStatus = "复制失败: " + ex.Message;
+        }
     }
 
     private void ParseStatusOutput(string output)
@@ -262,6 +345,13 @@ public class MainWindowViewModel : ViewModelBase
             {
                 L5DivertStatus = ExtractValue(l, "divert");
                 IsDivertRunning = l.Contains("LISTENING");
+                var portMatch = Regex.Match(l, @"^divert\s*:\s*(\d+)");
+                if (portMatch.Success && int.TryParse(portMatch.Groups[1].Value, out var port) && _apiPort != port)
+                {
+                    _apiPort = port;
+                    OnPropertyChanged(nameof(OpenAiApiEndpoint));
+                    OnPropertyChanged(nameof(AnthropicApiEndpoint));
+                }
             }
         }
     }

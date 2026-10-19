@@ -77,6 +77,15 @@ export function buildAgyEnv(cfg = {}, extraEnv = {}) {
   }
 }
 
+/** Build an isolated CLI environment that does not route requests back through the gateway. */
+export function buildAgyDirectEnv(extraEnv = {}, baseEnv = process.env) {
+  const env = { ...baseEnv, ...extraEnv }
+  delete env.AICODE_ENDPOINT_URL
+  delete env.JETSKI_SERVICE_ENDPOINT_URL
+  delete env.AICODE_TELEMETRY_ENDPOINT_URL
+  return env
+}
+
 /** 驱动 agy 执行单次 prompt */
 export function runPrompt(cfg, {
   prompt,
@@ -90,6 +99,7 @@ export function runPrompt(cfg, {
   onData = null,
   onErr = null,
   timeoutMs = 120000,
+  direct = false,
 } = {}) {
   const bin = locateAgy(cfg)
   const args = []
@@ -101,7 +111,7 @@ export function runPrompt(cfg, {
   if (outputFormat) args.push(`--output-format=${outputFormat}`)
   args.push('--print', prompt)
 
-  const mergedEnv = buildAgyEnv(cfg, env)
+  const mergedEnv = direct ? buildAgyDirectEnv(env) : buildAgyEnv(cfg, env)
 
   return new Promise((resolve, reject) => {
     let stdoutData = ''

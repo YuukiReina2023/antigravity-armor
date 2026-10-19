@@ -115,14 +115,36 @@
                         </Border>
                     </Grid>
 
-                    <!-- 系统运行流水日志 -->
+                    <!-- 网关端点和运行日志 -->
                     <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="#E5E3DC" BorderThickness="1" CornerRadius="8" Padding="14">
-                        <Grid RowDefinitions="Auto, *">
-                            <TextBlock Grid.Row="0" Text="系统内核与装甲诊断日志" FontSize="12" FontWeight="SemiBold" Foreground="#797670" Margin="0,0,0,8"/>
-                            <Border Grid.Row="1" Background="#F7F5EE" BorderBrush="#E2DDD5" BorderThickness="1" CornerRadius="6" Padding="10">
-                                <TextBox Text="{Binding SystemLog}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
-                                         FontFamily="Consolas, Cascadia Code, monospace" FontSize="12" Background="Transparent" BorderThickness="0" Foreground="#2B2927"/>
-                            </Border>
+                        <Grid RowDefinitions="Auto, Auto, *" RowSpacing="4">
+                            <Grid Grid.Row="0" ColumnDefinitions="Auto, *, Auto, Auto, *, Auto, Auto" ColumnSpacing="8" Margin="0,0,0,10">
+                                <TextBlock Grid.Column="0" Text="OpenAI" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#5C5852"/>
+                                <TextBox Grid.Column="1" Text="{Binding OpenAiApiEndpoint}" IsReadOnly="True" VerticalAlignment="Center" FontSize="11" Padding="6,4"/>
+                                <Button Grid.Column="2" Content="复制" Command="{Binding CopyOpenAiEndpointCommand}" Background="#ECEAE4" Foreground="#2D2B28" BorderBrush="#D8D5CD" CornerRadius="6" Padding="10,5"/>
+                                <TextBlock Grid.Column="3" Text="Claude" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="#5C5852"/>
+                                <TextBox Grid.Column="4" Text="{Binding AnthropicApiEndpoint}" IsReadOnly="True" VerticalAlignment="Center" FontSize="11" Padding="6,4"/>
+                                <Button Grid.Column="5" Content="复制" Command="{Binding CopyAnthropicEndpointCommand}" Background="#ECEAE4" Foreground="#2D2B28" BorderBrush="#D8D5CD" CornerRadius="6" Padding="10,5"/>
+                                <Button Grid.Column="6" Content="刷新日志" Command="{Binding RefreshGatewayLogCommand}" Background="#ECEAE4" Foreground="#2D2B28" BorderBrush="#D8D5CD" CornerRadius="6" Padding="10,5"/>
+                            </Grid>
+                            <TextBlock Grid.Row="1" Text="{Binding EndpointCopyStatus}" FontSize="10" Foreground="#797670"/>
+                            <TabControl Grid.Row="2">
+                                <TabItem Header="网关日志">
+                                    <Grid RowDefinitions="Auto, *" Margin="6">
+                                        <TextBlock Grid.Row="0" Text="{Binding GatewayLogStatus}" FontSize="10" Foreground="#797670" Margin="0,0,0,6"/>
+                                        <Border Grid.Row="1" Background="#F7F5EE" BorderBrush="#E2DDD5" BorderThickness="1" CornerRadius="6" Padding="10">
+                                            <TextBox Text="{Binding GatewayLog}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                                                     FontFamily="Consolas, Cascadia Code, monospace" FontSize="11" Background="Transparent" BorderThickness="0" Foreground="#2B2927"/>
+                                        </Border>
+                                    </Grid>
+                                </TabItem>
+                                <TabItem Header="系统操作">
+                                    <Border Background="#F7F5EE" BorderBrush="#E2DDD5" BorderThickness="1" CornerRadius="6" Padding="10" Margin="6">
+                                        <TextBox Text="{Binding SystemLog}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                                                 FontFamily="Consolas, Cascadia Code, monospace" FontSize="11" Background="Transparent" BorderThickness="0" Foreground="#2B2927"/>
+                                    </Border>
+                                </TabItem>
+                            </TabControl>
                         </Grid>
                     </Border>
 
@@ -147,7 +169,11 @@
                             <TextBlock Grid.Row="0" Grid.Column="0" Text="模型:" VerticalAlignment="Center" Foreground="#5C5852" FontWeight="Medium" Margin="0,0,8,0"/>
                             <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{Binding AvailableModels}" SelectedItem="{Binding SelectedModel}" Margin="0,0,12,0" HorizontalAlignment="Stretch"/>
                             <TextBlock Grid.Row="0" Grid.Column="2" Text="模式:" VerticalAlignment="Center" Foreground="#5C5852" FontWeight="Medium" Margin="0,0,8,0"/>
-                            <ComboBox Grid.Row="0" Grid.Column="3" ItemsSource="{Binding AvailableModes}" SelectedItem="{Binding SelectedMode}" Margin="0,0,12,0" Width="120"/>
+                            <StackPanel Grid.Row="0" Grid.Column="3" Orientation="Horizontal" Spacing="4" Margin="0,0,12,0" VerticalAlignment="Center">
+                                <Button Content="Auto" Command="{Binding SetModeCommand}" CommandParameter="auto" Background="{Binding AutoModeBackground}" Foreground="{Binding AutoModeForeground}" BorderBrush="#D8D5CD" BorderThickness="1" CornerRadius="16" Padding="11,5" FontSize="11"/>
+                                <Button Content="Edit" Command="{Binding SetModeCommand}" CommandParameter="accept-edits" Background="{Binding AcceptEditsModeBackground}" Foreground="{Binding AcceptEditsModeForeground}" BorderBrush="#D8D5CD" BorderThickness="1" CornerRadius="16" Padding="11,5" FontSize="11"/>
+                                <Button Content="Plan" Command="{Binding SetModeCommand}" CommandParameter="plan" Background="{Binding PlanModeBackground}" Foreground="{Binding PlanModeForeground}" BorderBrush="#D8D5CD" BorderThickness="1" CornerRadius="16" Padding="11,5" FontSize="11"/>
+                            </StackPanel>
                             <TextBlock Grid.Row="0" Grid.Column="4" Text="推理 Effort:" VerticalAlignment="Center" Foreground="#5C5852" FontWeight="Medium" Margin="0,0,8,0"/>
                             <ComboBox Grid.Row="0" Grid.Column="5" ItemsSource="{Binding AvailableEfforts}" SelectedItem="{Binding SelectedEffort}" Width="100"/>
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="Claude 映射:" VerticalAlignment="Center" Foreground="#5C5852" FontWeight="Medium" Margin="0,0,8,0"/>

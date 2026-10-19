@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { locateAgy, getAgyStatus, buildAgyEnv } from '../src/driver/agy.mjs'
+import { locateAgy, getAgyStatus, buildAgyEnv, buildAgyDirectEnv } from '../src/driver/agy.mjs'
 
 export async function testLocateAgyFindsBinaryOrFallback() {
   const bin = locateAgy()
@@ -13,6 +13,22 @@ export async function testBuildAgyEnvInjectsDivertProxy() {
   assert.equal(env.JETSKI_SERVICE_ENDPOINT_URL, 'http://127.0.0.1:50100')
   assert.equal(env.AICODE_TELEMETRY_ENDPOINT_URL, 'http://127.0.0.1:50100')
   assert.equal(env.CUSTOM_TEST_VAR, '123')
+}
+
+export async function testBuildAgyDirectEnvDoesNotRouteThroughGatewayOrMutateParentEnv() {
+  const baseEnv = {
+    AICODE_ENDPOINT_URL: 'http://127.0.0.1:50100',
+    JETSKI_SERVICE_ENDPOINT_URL: 'http://127.0.0.1:50100',
+    AICODE_TELEMETRY_ENDPOINT_URL: 'http://127.0.0.1:50100',
+    KEEP_ME: 'unchanged',
+  }
+  const env = buildAgyDirectEnv({ CUSTOM_TEST_VAR: '123' }, baseEnv)
+  assert.equal(env.AICODE_ENDPOINT_URL, undefined)
+  assert.equal(env.JETSKI_SERVICE_ENDPOINT_URL, undefined)
+  assert.equal(env.AICODE_TELEMETRY_ENDPOINT_URL, undefined)
+  assert.equal(env.KEEP_ME, 'unchanged')
+  assert.equal(env.CUSTOM_TEST_VAR, '123')
+  assert.equal(baseEnv.AICODE_ENDPOINT_URL, 'http://127.0.0.1:50100')
 }
 
 export async function testGetAgyStatusReturnsExpectedShape() {

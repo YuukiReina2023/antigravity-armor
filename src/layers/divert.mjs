@@ -9,19 +9,16 @@ import https from 'node:https'
 import { URL } from 'node:url'
 import { createWriteStream, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { execFileSync } from 'node:child_process'
 import { geminiToOpenAI, geminiEvent, createStreamAccumulator } from '../proto/convert.mjs'
 import { OPENAI_SSE_DONE } from '../proto/openai-sse.mjs'
 import { resolveKey } from '../credentials.mjs'
 import { log } from '../log.mjs'
 import { requestCredentialLine } from '../diag/token.mjs'
 import { probeToken, tokenInfoLine } from '../diag/tokeninfo.mjs'
-import { parseFlag } from '../diag/ls.mjs'
-import { newConversation, convDb } from '../driver/session.mjs'
-import { ensureWorkspaceProject } from '../workspace-project.mjs'
 import { analyzeRefusal, analyzeDeliverable, gateDecision, escalationFor, ESCALATION_LADDER, ladderSummary, detectLang, PREFILL_ZH, requestText } from './refusal.mjs'
 import { handleSameModel, handleSmartPassthrough, setOwnArmorSources, collectOwnArmorSources, SAFE_DELIVERABLE_DIRECTIVE } from './gemini-retry.mjs'
 import { isValidApiKey } from '../local-api-key.mjs'
+import { runPrompt as runAgyPrompt } from '../driver/agy.mjs'
 
 export const ARMOR_DIRECTIVE = [
   '',
@@ -230,245 +227,6 @@ export function resolveTier(modelName) {
   return 'flash'
 }
 
-async function readConversationSteps(dbFile) {
-  const { DatabaseSync } = await import('node:sqlite')
-  const db = new DatabaseSync(dbFile, { readOnly: true })
-  try {
-    return db.prepare('SELECT idx, status, step_payload FROM steps WHERE step_type = 15 ORDER BY idx DESC').all()
-  } finally {
-    db.close()
-  }
-}
-
-let cachedLs = null
-let lastLsCheck = 0
-
-function checkHttp(port) {
-  return new Promise((resolve) => {
-    const req = http.get({ host: '127.0.0.1', port, path: '/', timeout: 600 }, (res) => {
-      resolve(res.statusCode === 200)
-    })
-    req.on('error', () => resolve(false))
-    req.on('timeout', () => { req.destroy(); resolve(false) })
-  })
-}
-
-export async function findRunningLs(ttlMs = 15000) {
-  const now = Date.now()
-  if (cachedLs && now - lastLsCheck < ttlMs) return cachedLs
-  try {
-    const ps = `$procs = Get-CimInstance Win32_Process -Filter "Name='language_server.exe'"
-foreach ($p in $procs) {
-  $conns = Get-NetTCPConnection -OwningProcess $p.ProcessId -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -in @('127.0.0.1','0.0.0.0') }
-  $ports = ($conns | Select-Object -ExpandProperty LocalPort) -join ','
-  Write-Output "$($p.ProcessId)|$($p.CommandLine)|$ports"
-}`
-    const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], { encoding: 'utf8', timeout: 8000, windowsHide: true })
-    const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-    for (const line of lines) {
-      const parts = line.split('|')
-      if (parts.length >= 2) {
-        const pid = Number(parts[0])
-        const cmdline = parts[1]
-        const ports = (parts[2] || '').split(',').map(Number).filter(Boolean)
-        const csrf = parseFlag(cmdline, '--csrf_token')
-        if (ports.length > 0 && csrf) {
-          for (const port of ports) {
-            if (await checkHttp(port)) {
-              cachedLs = { pid, cmdline, csrf, httpPort: port, allPorts: ports }
-              lastLsCheck = now
-              return cachedLs
-            }
-          }
-        }
-      }
-    }
-  } catch (e) {}
-  return cachedLs
-}
-
-function forwardToTarget({ req, res, parsed, target, key, say }) {
-  const u = new URL(target)
-  const transport = u.protocol === 'http:' ? http : https
-  const clientKey = (req.headers.authorization && req.headers.authorization.startsWith('Bearer ') && req.headers.authorization.slice(7)) || key || 'sk-antigravity-local-auth'
-  const payload = Buffer.from(JSON.stringify(parsed))
-  const preq = transport.request({
-    host: u.hostname,
-    port: u.port || (u.protocol === 'http:' ? 80 : 443),
-    path: u.pathname + (u.search || ''),
-    method: 'POST',
-    timeout: 300000,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: 'Bearer ' + clientKey,
-      'Content-Length': payload.length,
-      'Access-Control-Allow-Origin': '*',
-      Accept: parsed.stream ? 'text/event-stream' : 'application/json',
-    },
-  }, (pres) => {
-    res.writeHead(pres.statusCode || 200, {
-      ...pres.headers,
-      'Access-Control-Allow-Origin': '*',
-    })
-    pres.pipe(res)
-  })
-  preq.on('error', (e) => {
-    say('OAI-UPSTREAM-ERR ' + e.message)
-    if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
-    res.end(JSON.stringify({ error: { message: e.message } }))
-  })
-  return preq.end(payload)
-}
-
-export async function handleLocalChatCompletion({ req, res, parsed, cfg, requestedModel, modelForTier = requestedModel, isStream, say, fallback, findLs = findRunningLs, createConversation = newConversation }) {
-  const ls = await findLs()
-  if (!ls) {
-    say('LOCAL-LS-NOT-FOUND -> fallback to target')
-    return fallback()
-  }
-
-  const prompt = messagesToPrompt(parsed.messages)
-  const tier = resolveTier(modelForTier)
-  say('LOCAL-DISPATCH model=' + requestedModel + ' googleModel=' + modelForTier + ' tier=' + tier + ' promptLen=' + prompt.length + ' httpPort=' + ls.httpPort)
-
-  let conv
-  try {
-    const proj = ensureWorkspaceProject(cfg)
-    conv = createConversation(cfg, prompt, {
-      httpPort: ls.httpPort,
-      csrf: ls.csrf,
-      model: tier,
-      projectId: proj?.projectId,
-    })
-  } catch (e) {
-    say('LOCAL-NEW-CONV-ERR ' + e.message)
-    if (resolveModelRoute(cfg, requestedModel)?.isClaude) {
-      res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
-      return res.end(JSON.stringify({ error: { message: 'Antigravity Language Server was found, but could not create a conversation: ' + e.message + '. Check Antigravity sign-in and state/logs/divert.log.' } }))
-    }
-    return fallback()
-  }
-
-  const convId = conv?.id
-  if (!convId) {
-    say('LOCAL-NO-CONV-ID')
-    return fallback()
-  }
-
-  const dbFile = convDb(cfg, convId)
-  const created = Math.floor(Date.now() / 1000)
-  const completionId = 'chatcmpl-' + convId.slice(0, 12)
-
-  if (isStream) {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-    })
-    const firstChunk = {
-      id: completionId,
-      object: 'chat.completion.chunk',
-      created,
-      model: requestedModel,
-      choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
-    }
-    res.write('data: ' + JSON.stringify(firstChunk) + '\n\n')
-
-    let sentLen = 0
-    let done = false
-    const startTime = Date.now()
-
-    while (!done && Date.now() - startTime < 120000) {
-      await new Promise((r) => setTimeout(r, 120))
-      try {
-        const rows = await readConversationSteps(dbFile)
-        for (const row of rows) {
-          if (row.step_payload) {
-            const fullText = extractCleanAssistantReply(Buffer.from(row.step_payload))
-            if (fullText) {
-              if (fullText.length > sentLen) {
-                const delta = fullText.slice(sentLen)
-                sentLen = fullText.length
-                const chunk = {
-                  id: completionId,
-                  object: 'chat.completion.chunk',
-                  created,
-                  model: requestedModel,
-                  choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
-                }
-                res.write('data: ' + JSON.stringify(chunk) + '\n\n')
-              }
-              if (row.status === 3) {
-                done = true
-              }
-              break
-            }
-          }
-        }
-      } catch (e) {}
-    }
-
-    const endChunk = {
-      id: completionId,
-      object: 'chat.completion.chunk',
-      created,
-      model: requestedModel,
-      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
-    }
-    res.write('data: ' + JSON.stringify(endChunk) + '\n\n')
-    res.write(OPENAI_SSE_DONE)
-    res.end()
-    say('LOCAL-STREAM-DONE convId=' + convId + ' sentChars=' + sentLen)
-  } else {
-    let fullText = ''
-    const startTime = Date.now()
-    while (Date.now() - startTime < 120000) {
-      await new Promise((r) => setTimeout(r, 150))
-      try {
-        const rows = await readConversationSteps(dbFile)
-        for (const row of rows) {
-          if (row.step_payload) {
-            const txt = extractCleanAssistantReply(Buffer.from(row.step_payload))
-            if (txt) {
-              fullText = txt
-              if (row.status === 3) break
-            }
-          }
-        }
-        if (fullText && rows.some((r) => r.status === 3)) break
-      } catch (e) {}
-    }
-
-    res.writeHead(200, {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Access-Control-Allow-Origin': '*',
-    })
-    res.end(JSON.stringify({
-      id: completionId,
-      object: 'chat.completion',
-      created,
-      model: requestedModel,
-      choices: [
-        {
-          index: 0,
-          message: {
-            role: 'assistant',
-            content: fullText,
-          },
-          finish_reason: 'stop',
-        },
-      ],
-      usage: {
-        prompt_tokens: 0,
-        completion_tokens: fullText.length,
-        total_tokens: fullText.length,
-      },
-    }, null, 2))
-    say('LOCAL-SYNC-DONE convId=' + convId + ' textChars=' + fullText.length)
-  }
-}
-
 export function anthropicMessagesToPrompt(parsed) {
   const parts = []
   if (parsed.system) {
@@ -505,172 +263,167 @@ export function anthropicMessagesToPrompt(parsed) {
   return parts.join('\n').trim()
 }
 
-export async function handleAnthropicMessages({ req, res, parsed, cfg, say, fallback, findLs = findRunningLs, createConversation = newConversation }) {
-  const requestedModel = parsed.model || cfg.divert?.claude?.model || 'claude-sonnet-4-6'
-  const cleanModel = requestedModel.startsWith('claude-gemini-')
-    ? requestedModel.slice('claude-'.length)
+function resolveAgyModel(cfg, requestedModel) {
+  const cleanModel = String(requestedModel || '').startsWith('claude-gemini-')
+    ? String(requestedModel).slice('claude-'.length)
     : requestedModel
-  const mappedRoute = resolveModelRoute(cfg, cleanModel)
-  const route = mappedRoute || {
-    name: requestedModel,
-    googleModel: /pro|opus|high/i.test(cleanModel) ? 'gemini-3.1-pro' : 'gemini-3.8-flash',
-    isClaude: true,
+  const route = resolveModelRoute(cfg, cleanModel)
+  if (route?.isClaude) return route.googleModel
+  if (String(cleanModel).startsWith('claude-')) {
+    return /pro|opus|high|mythos|fable/i.test(cleanModel) ? 'gemini-3.1-pro-high' : 'gemini-3.8-flash'
   }
+  return cleanModel || 'gemini-3.8-flash'
+}
 
-  const ls = await findLs()
-  if (!ls) {
-    say('ANTHROPIC-GOOGLE-LS-NOT-FOUND model=' + requestedModel)
-    return fallback()
-  }
+function apiError(res, protocol, status, message) {
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Access-Control-Allow-Origin': '*',
+  })
+  const error = protocol === 'anthropic'
+    ? { type: 'api_error', message }
+    : { message, type: 'api_error' }
+  res.end(JSON.stringify({ error }))
+}
 
-  const prompt = anthropicMessagesToPrompt(parsed)
-  const tier = resolveTier(route.googleModel)
-  const isStream = Boolean(parsed.stream)
-  say('ANTHROPIC-DISPATCH model=' + requestedModel + ' tier=' + tier + ' promptLen=' + prompt.length + ' stream=' + isStream)
-
-  let conv
-  try {
-    const proj = ensureWorkspaceProject(cfg)
-    conv = createConversation(cfg, prompt, {
-      httpPort: ls.httpPort,
-      csrf: ls.csrf,
-      model: tier,
-      projectId: proj?.projectId,
-    })
-  } catch (e) {
-    say('ANTHROPIC-NEW-CONV-ERR ' + e.message)
-    res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
-    return res.end(JSON.stringify({ error: { type: 'api_error', message: 'Antigravity Language Server was found, but could not create a conversation: ' + e.message + '. Check Antigravity sign-in and state/logs/divert.log.' } }))
-  }
-
-  const convId = conv?.id
-  if (!convId) {
-    say('ANTHROPIC-NO-CONV-ID')
-    return fallback()
-  }
-
-  const dbFile = convDb(cfg, convId)
-  const msgId = 'msg_' + convId.replace(/-/g, '').slice(0, 24)
-
-  if (isStream) {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-    })
-
-    res.write('event: message_start\n')
-    res.write('data: ' + JSON.stringify({
-      type: 'message_start',
-      message: {
-        id: msgId,
-        type: 'message',
-        role: 'assistant',
-        model: requestedModel,
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: 0 },
-      },
-    }) + '\n\n')
-
-    res.write('event: content_block_start\n')
-    res.write('data: ' + JSON.stringify({
-      type: 'content_block_start',
-      index: 0,
-      content_block: { type: 'text', text: '' },
-    }) + '\n\n')
-
-    let sentLen = 0
-    let done = false
-    const startTime = Date.now()
-
-    while (!done && Date.now() - startTime < 120000) {
-      await new Promise((r) => setTimeout(r, 120))
-      try {
-        const rows = await readConversationSteps(dbFile)
-        for (const row of rows) {
-          if (row.step_payload) {
-            const fullText = extractCleanAssistantReply(Buffer.from(row.step_payload))
-            if (fullText) {
-              if (fullText.length > sentLen) {
-                const delta = fullText.slice(sentLen)
-                sentLen = fullText.length
-                res.write('event: content_block_delta\n')
-                res.write('data: ' + JSON.stringify({
-                  type: 'content_block_delta',
-                  index: 0,
-                  delta: { type: 'text_delta', text: delta },
-                }) + '\n\n')
-              }
-              if (row.status === 3) {
-                done = true
-              }
-              break
-            }
-          }
-        }
-      } catch (e) {}
+async function executeAgyRequest({ cfg, prompt, model, say, runAgy = runAgyPrompt }) {
+  const result = await runAgy(cfg, {
+    prompt,
+    model,
+    mode: null,
+    outputFormat: 'text',
+    direct: true,
+    dangerouslySkipPermissions: true,
+  })
+  if (result?.failed || result?.code !== 0) {
+    const error = new Error('AGY CLI exited with code ' + String(result?.code ?? 'unknown'))
+    error.statusCode = 502
+    const firstErrorLine = String(result?.stderr || '').split(/\r?\n/).find((line) => line.trim())
+    if (firstErrorLine) {
+      error.detail = firstErrorLine
+        .replace(/sk-antigravity-[A-Za-z0-9_-]+/g, '[redacted API key]')
+        .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+        .slice(0, 240)
     }
+    throw error
+  }
+  const text = String(result.stdout || '').replace(/\s+$/, '')
+  say('AGY-CLI-DONE model=' + model + ' promptChars=' + prompt.length + ' replyChars=' + text.length)
+  return text
+}
 
-    res.write('event: content_block_stop\n')
-    res.write('data: ' + JSON.stringify({ type: 'content_block_stop', index: 0 }) + '\n\n')
-
-    res.write('event: message_delta\n')
-    res.write('data: ' + JSON.stringify({
-      type: 'message_delta',
-      delta: { stop_reason: 'end_turn', stop_sequence: null },
-      usage: { output_tokens: sentLen },
-    }) + '\n\n')
-
-    res.write('event: message_stop\n')
-    res.write('data: ' + JSON.stringify({ type: 'message_stop' }) + '\n\n')
-    res.end()
-    say('ANTHROPIC-STREAM-DONE convId=' + convId + ' sentChars=' + sentLen)
-  } else {
-    let fullText = ''
-    const startTime = Date.now()
-    while (Date.now() - startTime < 120000) {
-      await new Promise((r) => setTimeout(r, 150))
-      try {
-        const rows = await readConversationSteps(dbFile)
-        for (const row of rows) {
-          if (row.step_payload) {
-            const txt = extractCleanAssistantReply(Buffer.from(row.step_payload))
-            if (txt) {
-              fullText = txt
-              if (row.status === 3) break
-            }
-          }
-        }
-        if (fullText && rows.some((r) => r.status === 3)) break
-      } catch (e) {}
-    }
-
+function writeAnthropicReply(res, requestedModel, prompt, text, isStream) {
+  const msgId = 'msg_' + Date.now().toString(36)
+  const inputTokens = Math.ceil(prompt.length / 4)
+  const outputTokens = Math.ceil(text.length / 4)
+  if (!isStream) {
     res.writeHead(200, {
       'Content-Type': 'application/json; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
     })
-    res.end(JSON.stringify({
+    return res.end(JSON.stringify({
       id: msgId,
       type: 'message',
       role: 'assistant',
       model: requestedModel,
-      content: [
-        {
-          type: 'text',
-          text: fullText,
-        },
-      ],
+      content: [{ type: 'text', text }],
       stop_reason: 'end_turn',
       stop_sequence: null,
-      usage: {
-        input_tokens: 0,
-        output_tokens: fullText.length,
-      },
-    }, null, 2))
-    say('ANTHROPIC-SYNC-DONE convId=' + convId + ' textChars=' + fullText.length)
+      usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+    }))
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+  })
+  const event = (name, data) => res.write('event: ' + name + '\ndata: ' + JSON.stringify(data) + '\n\n')
+  event('message_start', {
+    type: 'message_start',
+    message: {
+      id: msgId, type: 'message', role: 'assistant', model: requestedModel, content: [],
+      stop_reason: null, stop_sequence: null, usage: { input_tokens: inputTokens, output_tokens: 0 },
+    },
+  })
+  event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
+  if (text) event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } })
+  event('content_block_stop', { type: 'content_block_stop', index: 0 })
+  event('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: outputTokens } })
+  event('message_stop', { type: 'message_stop' })
+  return res.end()
+}
+
+function writeOpenAIReply(res, requestedModel, prompt, text, isStream) {
+  const id = 'chatcmpl-' + Date.now().toString(36)
+  const created = Math.floor(Date.now() / 1000)
+  const promptTokens = Math.ceil(prompt.length / 4)
+  const completionTokens = Math.ceil(text.length / 4)
+  if (!isStream) {
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+    })
+    return res.end(JSON.stringify({
+      id,
+      object: 'chat.completion',
+      created,
+      model: requestedModel,
+      choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens },
+    }))
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+  })
+  const chunk = (delta, finishReason = null) => ({
+    id, object: 'chat.completion.chunk', created, model: requestedModel,
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  })
+  res.write('data: ' + JSON.stringify(chunk({ role: 'assistant' })) + '\n\n')
+  if (text) res.write('data: ' + JSON.stringify(chunk({ content: text })) + '\n\n')
+  res.write('data: ' + JSON.stringify(chunk({}, 'stop')) + '\n\n')
+  res.write(OPENAI_SSE_DONE)
+  return res.end()
+}
+
+export async function handleAnthropicMessages({ req, res, parsed, cfg, say, runAgy }) {
+  const requestedModel = parsed.model || cfg.divert?.claude?.model || 'claude-sonnet-4-6'
+  const model = resolveAgyModel(cfg, requestedModel)
+  const prompt = anthropicMessagesToPrompt(parsed)
+  const isStream = Boolean(parsed.stream)
+  say('ANTHROPIC-AGY-CLI model=' + requestedModel + ' agyModel=' + model + ' promptLen=' + prompt.length + ' stream=' + isStream)
+  try {
+    const text = await executeAgyRequest({ cfg, prompt, model, say, runAgy })
+    return writeAnthropicReply(res, requestedModel, prompt, text, isStream)
+  } catch (e) {
+    const status = e.statusCode || 503
+    say('ANTHROPIC-AGY-CLI-ERR model=' + model + ' status=' + status + (e.detail ? ' detail=' + e.detail : e.code ? ' code=' + e.code : ''))
+    return apiError(res, 'anthropic', status, status === 503
+      ? 'AGY CLI could not be started. Verify the CLI installation and sign-in.'
+      : 'AGY CLI failed to complete the request. Check the gateway log for details.')
+  }
+}
+
+export async function handleOpenAIChatCompletions({ req, res, parsed, cfg, requestedModel, say, runAgy }) {
+  const model = resolveAgyModel(cfg, requestedModel)
+  const prompt = messagesToPrompt(parsed.messages)
+  const isStream = Boolean(parsed.stream)
+  say('OPENAI-AGY-CLI model=' + requestedModel + ' agyModel=' + model + ' promptLen=' + prompt.length + ' stream=' + isStream)
+  try {
+    const text = await executeAgyRequest({ cfg, prompt, model, say, runAgy })
+    return writeOpenAIReply(res, requestedModel, prompt, text, isStream)
+  } catch (e) {
+    const status = e.statusCode || 503
+    say('OPENAI-AGY-CLI-ERR model=' + model + ' status=' + status + (e.detail ? ' detail=' + e.detail : e.code ? ' code=' + e.code : ''))
+    return apiError(res, 'openai', status, status === 503
+      ? 'AGY CLI could not be started. Verify the CLI installation and sign-in.'
+      : 'AGY CLI failed to complete the request. Check the gateway log for details.')
   }
 }
 
@@ -997,12 +750,7 @@ export function createDivertServer(cfg, opts = {}) {
           parsed,
           cfg,
           say,
-          findLs: opts.findRunningLs || findRunningLs,
-          createConversation: opts.newConversation || newConversation,
-          fallback: () => {
-            res.writeHead(503, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
-            res.end(JSON.stringify({ error: { type: 'api_error', message: 'Antigravity language server unavailable. Start Antigravity and retry.' } }))
-          },
+          runAgy: opts.runAgyPrompt || runAgyPrompt,
         })
         return
       }
@@ -1019,27 +767,14 @@ export function createDivertServer(cfg, opts = {}) {
         const isStream = Boolean(parsed.stream)
         say('OPENAI-CHAT ' + req.method + ' ' + req.url + ' model=' + requestedModel + ' stream=' + isStream)
 
-        // 优先检查是否命中映射模型或 Claude 路由
-        const route = resolveModelRoute(cfg, requestedModel)
-        const localClaudeFallback = () => {
-          res.writeHead(503, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
-          res.end(JSON.stringify({ error: { message: 'Antigravity language server unavailable. Start Antigravity and retry.' } }))
-        }
-        handleLocalChatCompletion({
+        handleOpenAIChatCompletions({
           req,
           res,
           parsed,
           cfg,
           requestedModel,
-          modelForTier: route?.isClaude ? route.googleModel : requestedModel,
-          isStream,
           say,
-          findLs: opts.findRunningLs || findRunningLs,
-          createConversation: opts.newConversation || newConversation,
-          fallback: () => {
-            if (route?.isClaude) return localClaudeFallback()
-            forwardToTarget({ req, res, parsed, target, key, say })
-          },
+          runAgy: opts.runAgyPrompt || runAgyPrompt,
         })
         return
       }

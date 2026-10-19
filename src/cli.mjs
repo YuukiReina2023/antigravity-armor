@@ -187,6 +187,20 @@ function divert(action) {
     if (existsSync(lp)) console.log('recent:\n' + readText(lp).split('\n').slice(-8).join('\n'))
     return
   }
+  if (action === 'logs') {
+    const requestedLimit = Number(flags.lines || 200)
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1) {
+      throw new Error('--lines must be a positive integer')
+    }
+    const limit = Math.min(1000, requestedLimit)
+    const logFile = join(cfg.logDir, 'divert.log')
+    if (!existsSync(logFile)) {
+      console.log('No gateway log yet. Start the divert service to create one.')
+      return
+    }
+    console.log(readText(logFile).split(/\r?\n/).slice(-limit).join('\n'))
+    return
+  }
   if (action === 'stop') {
     // 之前这里引号写错（Name='node.exe 少一个引号），PowerShell 直接抛 InvalidArgument，stop 从未生效过
     const ps = "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -like '*divert run*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
